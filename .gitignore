@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.venv/
+*.egg-info/
+
+# Environment variables
+.env*.local
+
+# Log files
+*.log
+
+# Editor directories
+.vscode/
+.idea/
+*.sw?
+
+# OS generated files
+.DS_Store
+
+# Build artifacts
+/build/
+/dist/
+
+# Database
+*.sqlite
+
+# Generated files
+problems-metadata.json
+remote_tasks.json
+
+# Node (if applicable)
+node_modules/

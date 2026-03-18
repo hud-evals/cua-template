@@ -1,0 +1,50 @@
+[project]
+name = "cua-env"
+version = "0.1.0"
+description = "CUA environment with computer use, editor, and desktop tools for agent evaluations"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "hud-python[agents]>=0.5.17",
+    "click>=8.0.0",
+    "anthropic>=0.49.0",
+    "mcp[cli]>=1.10.1",
+    "jsonschema>=4.21.0",
+    "numpy>=1.26.0",
+    "pydantic>=2.11.4",
+    "pyyaml>=6.0.2",
+    "pillow",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "ruff==0.11.2", "pre-commit>=3.5.0"]
+
+[project.scripts]
+hud_eval = "cli:main"
+setup_problem = "cli:setup_problem"
+grade_problem = "cli:grade_problem"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.hud]
+image = "cua-template:dev"
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "C4", "UP"]
+ignore = ["E501"]
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

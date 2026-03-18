@@ -1,0 +1,5 @@
+type = process
+command=/usr/bin/websockify --web /usr/share/novnc 6080 localhost:5900
+logfile = /var/log/dinit/websockify.log
+smooth-recovery = true
+restart = true

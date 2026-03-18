@@ -1,0 +1,6 @@
+type=process
+command=sudo -E -u ubuntu bash -c "cd /home/ubuntu && xfce4-session"
+logfile=/var/log/dinit/xfce4-session.log
+restart = true
+# Requires X server
+depends-on = xvfb

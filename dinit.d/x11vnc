@@ -1,0 +1,7 @@
+type = process
+command=sudo -E -u ubuntu x11vnc -forever -shared
+logfile = /var/log/dinit/x11vnc.log
+smooth-recovery = true
+restart = true
+waits-for = xvfb
+depends-on = xvfb

@@ -90,16 +90,21 @@ async def str_replace_editor(command: str, path: str, ...) -> str:
 Each task is a self-contained scenario that owns its setup, prompt, and grading:
 
 ```python
-from env import env, make_prompt, setup_task
-from grading import ExampleGrader, Grade, ValidateMode
+from env import ValidateMode, env, make_prompt, setup_task
+from grading import BashGrader, Grade, SubScore
+from hud.native.graders import exact_match
 
 @env.scenario("my-task")
 async def my_task(validate_mode: ValidateMode | None = None):
     await setup_task()
     prompt = make_prompt("Description of what the agent should do.")
-    _ = yield prompt
-    grade = Grade.from_subscores([MyGrader.grade(weight=1.0)])
-    yield grade.score
+    answer = yield prompt
+
+    # Async graders run in parallel via Grade.gather()
+    yield await Grade.gather(
+        BashGrader.grade(weight=0.5, command="test -f /home/ubuntu/output.txt"),
+        SubScore(name="answer", value=exact_match(answer, "expected"), weight=0.5),
+    )
 ```
 
 ### Dinit Service Management
@@ -120,7 +125,7 @@ cua-template/
 ├── env.py              # Tools + scenario helpers
 ├── cli.py              # MCP server entry point
 ├── tools/              # computer, editor, bash
-├── grading/            # Grading logic (Grader base class, Grade)
+├── grading/            # Custom graders (extends hud.native.graders)
 ├── tasks/              # Scenario definitions
 ├── dinit.d/            # Service definitions (xvfb, x11vnc, etc.)
 ├── dinit_setup.py      # Dinit startup logic

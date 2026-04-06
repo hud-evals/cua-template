@@ -100,6 +100,12 @@ COPY dinit.d/ /etc/dinit.d/
 RUN mkdir -p /var/log/dinit && chmod 755 /var/log/dinit
 
 
+# MCP_TESTING_MODE controls tool registration:
+#   "1" (default) = agent tools (computer, editor)
+#   unset         = platform orchestration tools (setup_problem, grade_problem)
+ARG MCP_TESTING_MODE="1"
+ENV MCP_TESTING_MODE=${MCP_TESTING_MODE}
+
 # =============================================================================
 # Stage 3: HUD Environment Setup
 # =============================================================================
@@ -110,6 +116,7 @@ RUN pip install uv --break-system-packages
 
 # Copy the environment structure
 COPY ./pyproject.toml /mcp_server/pyproject.toml
+COPY ./uv.lock /mcp_server/uv.lock
 WORKDIR /mcp_server
 
 ENV RUST_LOG=warn
@@ -137,6 +144,12 @@ ENV SCREENSHOT_DIR=/home/ubuntu/screenshots
 RUN mkdir -p /home/ubuntu/Downloads && chmod 777 /home/ubuntu/Downloads
 
 RUN chmod 777 /root
+
+# Security: agent cannot read grading logic or scenario internals
+# The MCP server runs as root and can read these; the agent's tools demote to uid 1000
+RUN chmod 700 /mcp_server/env.py /mcp_server/tasks /mcp_server/grading
+
+ENV _HUD_DEV_CHILD=1
 
 # Run the HUD MCP server
 CMD ["hud", "dev", "env:env", "--stdio"]

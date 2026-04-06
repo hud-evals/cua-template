@@ -28,7 +28,6 @@ __pycache__/
 *.sqlite
 
 # Generated files
-problems-metadata.json
 remote_tasks.json
 
 # Node (if applicable)

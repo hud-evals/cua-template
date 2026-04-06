@@ -1,7 +1,6 @@
 """Task definitions for CUA environment.
 
 Tasks are scenarios registered via @env.scenario when imported.
-The @problem decorator also registers them in PROBLEM_REGISTRY for backward compatibility.
 """
 
 # Import task modules to register their scenarios

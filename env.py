@@ -5,13 +5,12 @@ This environment provides tools for:
 - File editing with str_replace_editor
 - Bash command execution
 """
-import json
+
 import logging
 
 from hud import Environment
 
 from dinit_setup import start_dinit
-from grading.spec import PROBLEM_REGISTRY, EnvironmentState, Grade, ProblemSpec
 from tools import ComputerTool, EditTool, ToolError
 from tools.computer import Action, ScrollDirection
 
@@ -137,103 +136,21 @@ async def str_replace_editor(
         return f"Error: {e.message}"
 
 
-@env.tool()
-async def setup_problem(*, problem_id: str) -> str:
-    """Set up the environment for a problem: start services and return the problem statement.
-
-    Args:
-        problem_id: The ID of the problem to set up.
-
-    Returns:
-        The problem statement for the agent to solve.
-    """
-    return await setup_problem_impl(problem_id)
-
-
-@env.tool()
-async def grade_problem(*, problem_id: str) -> str:
-    """Grade the current state of the environment for a problem.
-
-    Args:
-        problem_id: The ID of the problem to grade.
-
-    Returns:
-        JSON string with score, subscores, weights, and metadata.
-    """
-
-    grade = grade_problem_impl(problem_id)
-    return json.dumps({
-        "score": float(grade.score),
-        "subscores": grade.subscores,
-        "weights": grade.weights,
-        "metadata": grade.metadata,
-    })
-
-
 # ============================================================================
 # Scenario Helpers (called by @env.scenario functions in tasks/)
 # ============================================================================
 
 
-template = """
-Use computer use tools to complete the following task:
-
-First, login into the app using the following credentials:
-Username: admin
-Password: adminadmin
-
-<STATEMENT>
-"""
-
-
-def generate_statement_from_spec(spec: ProblemSpec) -> str:
-    return spec.description
-
-
-def _get_spec(problem_id: str) -> ProblemSpec:
-    """Look up a problem spec by id."""
-    for spec in PROBLEM_REGISTRY:
-        if spec.id == problem_id:
-            return spec
-    raise ValueError(f"No problem found for id: {problem_id}")
-
-
-async def setup_problem_impl(problem_id: str) -> str:
-    """Start the environment and return the problem statement.
-
-    This is the implementation behind the old setup_problem MCP tool.
-    Called by @env.scenario generators.
-    """
-    spec = _get_spec(problem_id)
-
-    logger.info("=== SETUP_PROBLEM for %s ===", problem_id)
-
-    # Start the dinit services
+async def setup_task() -> None:
+    """Start the dinit services (virtual desktop stack)."""
+    logger.info("Starting dinit services")
     await start_dinit()
     logger.info("Dinit services started")
 
-    # Run the setup function
-    if spec.setup:
-        logger.info("Calling setup function with template: %s", spec.template)
-        await spec.setup(spec.template)
-        logger.info("Setup function completed")
-    else:
-        logger.warning("No setup function found for %s", problem_id)
 
-    # Create the full statement
-    statement = generate_statement_from_spec(spec)
-    return template.replace("<STATEMENT>", statement)
-
-
-def grade_problem_impl(problem_id: str) -> Grade:
-    """Grade the problem and return a Grade object.
-
-    This is the implementation behind the old grade_problem MCP tool.
-    Called by @env.scenario generators.
-    """
-    spec = _get_spec(problem_id)
-    state = EnvironmentState("")
-    return spec.solution_fn(state)
+def make_prompt(description: str) -> str:
+    """Format a task description into an agent prompt."""
+    return f"Use computer use tools to complete the following task:\n\n{description}"
 
 
 # ============================================================================

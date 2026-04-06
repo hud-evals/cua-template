@@ -1,32 +1,15 @@
 """Grading specifications and types for the CUA environment."""
 
-import inspect
-import os
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
 import numpy as np
 
 # ---------------------------------------------------------------------------
-# Environment state
+# Types
 # ---------------------------------------------------------------------------
 
-
-class EnvironmentState:
-    """Represents the state of the environment for grading purposes.
-
-    This is a minimal placeholder. Specific problem implementations
-    should extend this with domain-specific state attributes.
-    """
-
-    def __init__(self, data: str = ""):
-        self.data = data
-
-
-# ---------------------------------------------------------------------------
-# Grader name validation
-# ---------------------------------------------------------------------------
+ValidateMode = Literal["baseline_fail", "golden_pass"]
 
 
 def validate_grader_name(name: str) -> str:
@@ -58,13 +41,13 @@ class SubGrade:
         validate_grader_name(self.name)
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, frozen=True)
 class Grade:
-    """The grade returned by a scenario or the mcp.grade_problem tool."""
+    """The grade returned by a scenario."""
 
     subscores: dict[str, float]
     weights: dict[str, float]
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] | None = None
 
     @property
     def score(self):
@@ -73,7 +56,7 @@ class Grade:
         assert min(self.subscores.values()) >= 0
         assert max(self.subscores.values()) <= 1
 
-        score = sum([self.subscores[key] * self.weights[key] for key in self.subscores.keys()])
+        score = sum(self.subscores[key] * self.weights[key] for key in self.subscores)
         return np.clip(score, 0.0, 1.0)
 
     @staticmethod
@@ -112,159 +95,53 @@ class Grade:
         return Grade(
             subscores=subscores_dict,
             weights=weights_dict,
-            metadata=metadata_dict,
+            metadata=metadata_dict or None,
         )
 
 
 # ---------------------------------------------------------------------------
-# SubGrader base class
+# Grader base class
 # ---------------------------------------------------------------------------
 
 
-class SubGrader:
+class Grader:
     name: str = "BaseGrader"
 
     @staticmethod
-    def compute_score(state: EnvironmentState, **kwargs) -> float:
+    def compute_score(**kwargs) -> float | tuple[float, dict]:
         raise NotImplementedError("Subclasses must implement this method")
 
     @classmethod
-    def grade(cls, state: EnvironmentState, weight: float, **kwargs) -> SubGrade:
+    def grade(cls, weight: float, **kwargs) -> SubGrade:
+        result = cls.compute_score(**kwargs)
+        if isinstance(result, tuple):
+            score, metadata = result
+        else:
+            score, metadata = result, {}
         return SubGrade(
             name=cls.name,
             weight=weight,
-            score=cls.compute_score(state, **kwargs),
+            score=score,
             parameters=kwargs,
+            metadata=metadata,
         )
 
     @classmethod
     def any(cls, weight: float, subgrades: list[SubGrade]) -> SubGrade:
-        if any(subgrade.score == 1.0 for subgrade in subgrades):
-            score = 1.0
-        else:
-            score = 0.0
+        score = max((sg.score for sg in subgrades), default=0.0)
         return SubGrade(
             name=f"{cls.name}_any",
             weight=weight,
             score=score,
-            parameters={str(idx): subgrade.parameters for idx, subgrade in enumerate(subgrades)},
+            parameters={str(idx): sg.parameters for idx, sg in enumerate(subgrades)},
         )
 
     @classmethod
     def all(cls, weight: float, subgrades: list[SubGrade]) -> SubGrade:
-        if all(subgrade.score == 1.0 for subgrade in subgrades):
-            score = 1.0
-        else:
-            score = 0.0
+        score = min((sg.score for sg in subgrades), default=0.0)
         return SubGrade(
             name=f"{cls.name}_all",
             weight=weight,
             score=score,
-            parameters={str(idx): subgrade.parameters for idx, subgrade in enumerate(subgrades)},
+            parameters={str(idx): sg.parameters for idx, sg in enumerate(subgrades)},
         )
-
-
-# ---------------------------------------------------------------------------
-# Problem specification registry
-# ---------------------------------------------------------------------------
-
-
-ReviewLevel = Literal[
-    "no-review",
-    "creator-reviewed",
-    "hud-approved",
-    "customer-approved",
-]
-
-
-@dataclass
-class ProblemSpec:
-    # required fields (no defaults)
-    id: str
-    description: str
-    difficulty: str
-    task_type: str
-    solution_fn: Callable[[EnvironmentState], Grade] = field(repr=False)
-    template: str
-    review_level: ReviewLevel
-    # optional fields (with defaults)
-    config: dict[str, Any] | None = None
-    image: str = "cua-template"
-    startup_command: str = "hud dev env:env --stdio"
-    setup: Callable[[dict[str, Any]], Any] | None = None
-    demo: bool = False
-    too_hard: bool = False
-    seed: bool = False
-    file_path: str = field(default="")
-    source_code: str = field(default="")
-    expected_pass_rate: float | None = None
-    line_number: int | None = None
-    neogen_metadata: dict[str, Any] | None = None
-
-
-# Global list of all registered problems
-PROBLEM_REGISTRY: list[ProblemSpec] = []
-
-
-def problem(
-    *,
-    id: str,
-    description: str,
-    difficulty: str,
-    task_type: str,
-    template: str,
-    review_level: ReviewLevel,
-    config: dict[str, Any] | None = None,
-    image: str = "cua-template",
-    startup_command: str = "hud dev env:env --stdio",
-    setup: Callable[[dict[str, Any]], Any] | None = None,
-    demo: bool = False,
-    too_hard: bool = False,
-    seed: bool = False,
-    expected_pass_rate: float | None = None,
-    neogen_metadata: dict[str, Any] | None = None,
-):
-    """Decorator to register a problem spec alongside its grading function."""
-
-    def decorator(fn: Callable[[EnvironmentState], Grade]):
-        file_path = inspect.getfile(fn)
-        try:
-            _, starting_line = inspect.getsourcelines(fn)
-        except (OSError, TypeError):
-            starting_line = None
-        try:
-            project_root = os.getcwd()
-            relative_path = os.path.relpath(file_path, project_root)
-        except ValueError:
-            relative_path = file_path
-
-        try:
-            source_code = inspect.getsource(fn)
-        except (OSError, TypeError):
-            source_code = ""
-
-        spec = ProblemSpec(
-            id=id,
-            description=description,
-            difficulty=difficulty,
-            task_type=task_type,
-            template=template,
-            review_level=review_level,
-            config=config,
-            image=image,
-            startup_command=startup_command,
-            setup=setup,
-            solution_fn=fn,
-            demo=demo,
-            too_hard=too_hard,
-            seed=seed,
-            file_path=relative_path,
-            source_code=source_code,
-            expected_pass_rate=expected_pass_rate,
-            line_number=starting_line,
-            neogen_metadata=neogen_metadata,
-        )
-        PROBLEM_REGISTRY.append(spec)
-        return fn
-
-    return decorator

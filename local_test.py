@@ -33,13 +33,14 @@ async def test_tools():
         tools = env.as_tools()
         print(f"Tools: {[t.name for t in tools]}")
 
+
 async def test_scenario():
-    """Test the solve-task scenario with example-problem."""
-    print("=== Test: solve-task (example-problem) ===")
+    """Test the example-task scenario."""
+    print("=== Test: example-task ===")
     env = Environment("cua")
     env.connect_image(IMAGE)
 
-    task = env("solve-task", problem_id="example-problem")
+    task = env("example-task")
     async with hud.eval(task, trace=True) as ctx:
         agent = ClaudeAgent.create(model="claude-sonnet-4-5")
         await agent.run(ctx, max_steps=10)

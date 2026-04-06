@@ -41,7 +41,12 @@ uv run imagectl4.py cua-template -bvr
 
 Use `--ids` to target specific scenarios:
 ```bash
-uv run imagectl4.py cua-template -bvr --ids example-problem
+uv run imagectl4.py cua-template -bvr --ids example-task
+```
+
+Enable hints for scenarios that support them:
+```bash
+uv run imagectl4.py cua-template -r --hints
 ```
 
 ### Remote
@@ -82,21 +87,24 @@ async def str_replace_editor(command: str, path: str, ...) -> str:
 
 ### Tasks (in `tasks/*.py`)
 
-There is one generic `solve-task` scenario that accepts a `problem_id` argument. You only need to register problems with the `@problem()` decorator:
+Each task is a self-contained scenario that owns its setup, prompt, and grading:
 
 ```python
-from grading import problem, Grade, EnvironmentState
+from env import env, make_prompt, setup_task
+from grading import ExampleGrader, Grade, ValidateMode
 
-@problem(id="my-task", description="...", difficulty="medium", ...)
-def my_task_solution(state: EnvironmentState) -> Grade:
-    return Grade.from_subscores([MyGrader.grade(state, 1.0)])
+@env.scenario("my-task")
+async def my_task(validate_mode: ValidateMode | None = None):
+    await setup_task()
+    prompt = make_prompt("Description of what the agent should do.")
+    _ = yield prompt
+    grade = Grade.from_subscores([MyGrader.grade(weight=1.0)])
+    yield grade.score
 ```
-
-The `solve-task` scenario (defined in `tasks/basic.py`) handles setup and grading automatically for any registered problem.
 
 ### Dinit Service Management
 
-Services are defined in `dinit.d/` and managed by a Python reimplementation (`manual_dinit.py`). See [dinit_guide.md](dinit_guide.md) and [dinit_quick_reference.md](dinit_quick_reference.md) for details.
+Services are defined in `dinit.d/` and managed by a Python reimplementation (`manual_dinit.py`).
 
 ## Generate Task JSON
 
@@ -109,14 +117,14 @@ uv run imagectl4.py -j --ids my-task # specific scenarios
 
 ```
 cua-template/
-├── env.py              # Tools + scenario registration
+├── env.py              # Tools + scenario helpers
+├── cli.py              # MCP server entry point
 ├── tools/              # computer, editor, bash
-├── grading/            # Grading logic and spec
-├── tasks/              # Problem definitions
+├── grading/            # Grading logic (Grader base class, Grade)
+├── tasks/              # Scenario definitions
 ├── dinit.d/            # Service definitions (xvfb, x11vnc, etc.)
 ├── dinit_setup.py      # Dinit startup logic
 ├── manual_dinit.py     # Python dinit implementation
-├── step.py             # CLA action preprocessing
 ├── imagectl4.py        # Build/validate/run orchestration
 ├── local_test.py       # Dev testing
 └── Dockerfile.hud      # Container config
@@ -132,6 +140,4 @@ cua-template/
 
 ## Further Reading
 
-- **[Dinit Guide](dinit_guide.md)** - Comprehensive dinit service documentation
-- **[Dinit Quick Reference](dinit_quick_reference.md)** - Quick reference for service definitions
 - **[Full Documentation](https://docs.hud.ai)** - HUD platform documentation

@@ -110,7 +110,6 @@ RUN pip install uv --break-system-packages
 
 # Copy the environment structure
 COPY ./pyproject.toml /mcp_server/pyproject.toml
-COPY ./README.md /mcp_server/README.md
 WORKDIR /mcp_server
 
 ENV RUST_LOG=warn
@@ -123,7 +122,6 @@ COPY ./env.py /mcp_server/env.py
 COPY ./cli.py /mcp_server/cli.py
 COPY ./dinit_setup.py /mcp_server/dinit_setup.py
 COPY ./manual_dinit.py /mcp_server/manual_dinit.py
-COPY ./step.py /mcp_server/step.py
 COPY ./tools /mcp_server/tools
 COPY ./grading /mcp_server/grading
 COPY ./tasks /mcp_server/tasks
@@ -139,9 +137,6 @@ ENV SCREENSHOT_DIR=/home/ubuntu/screenshots
 RUN mkdir -p /home/ubuntu/Downloads && chmod 777 /home/ubuntu/Downloads
 
 RUN chmod 777 /root
-
-# PROBLEM_ID is set at runtime via scenario args, not at build time
-ENV PROBLEM_ID=""
 
 # Run the HUD MCP server
 CMD ["hud", "dev", "env:env", "--stdio"]

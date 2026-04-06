@@ -5,10 +5,10 @@ for the cua-template CUA environment.
 
 Actions:
   -b/--build:     Build Docker image (docker build -t <image> -f Dockerfile.hud .)
-  -v/--validate:  Validate problems (baseline_fail + golden_pass, 0 agent steps)
-  -r/--run:       Run an agent against problems
+  -v/--validate:  Validate scenarios (baseline_fail + golden_pass, 0 agent steps)
+  -r/--run:       Run an agent against scenarios
   -p/--push:      Push Docker image to registry
-  -j/--json:      Generate problem-metadata.json
+  -j/--json:      Generate remote_tasks.json
 
 -b and -v/-r are mutually exclusive. Extra args after -- are forwarded
 to the active action:
@@ -22,7 +22,7 @@ to the active action:
 -p and -j can be combined with either side.
 
 Parallelism uses asyncio throughout. Validation and run tasks for
-different problem IDs execute concurrently via asyncio.gather.
+different scenario IDs execute concurrently via asyncio.gather.
 """
 
 from __future__ import annotations
@@ -44,8 +44,6 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 PYPROJECT_PATH = Path("pyproject.toml")
-
-SCENARIO_NAME = "solve-task"
 
 
 # ============================================================================
@@ -74,17 +72,17 @@ def _looks_like_registry_image(image: str) -> bool:
 
 
 # ============================================================================
-# Problem discovery
+# Scenario discovery
 # ============================================================================
 
 
-def discover_problem_ids() -> list[str]:
-    """Auto-discover all registered problem IDs by importing env.py."""
-    import tasks  # noqa: F401 — ensure all @problem() decorators run
-    from grading.spec import PROBLEM_REGISTRY
+def discover_scenario_ids() -> list[str]:
+    """Auto-discover all registered scenario IDs from the environment."""
+    import tasks  # noqa: F401 — ensure all @env.scenario() decorators run
+    from env import env
 
-    ids = [spec.id for spec in PROBLEM_REGISTRY]
-    logger.info(f"Auto-discovered {len(ids)} problem(s): {ids}")
+    ids = list(env._scenarios.keys())
+    logger.info(f"Auto-discovered {len(ids)} scenario(s): {ids}")
     return ids
 
 
@@ -146,43 +144,45 @@ async def push_image(image: str) -> bool:
 VALIDATE_MODES = ("baseline_fail", "golden_pass")
 
 
-async def validate_problem(
+async def validate_scenario(
     image: str,
-    problem_id: str,
+    scenario_id: str,
     validate_mode: str,
     *,
+    hints_enabled: bool = False,
     docker_args: list[str] | None = None,
 ) -> tuple[str, str, float | None]:
-    """Validate a single problem + mode by running an eval with 0 agent steps."""
-    label = f"{problem_id} ({validate_mode})"
+    """Validate a single scenario + mode by running an eval with 0 agent steps."""
+    label = f"{scenario_id} ({validate_mode})"
     logger.info(f"Validating: {label}")
 
     env = Environment("cua")
     env.connect_image(image, docker_args=docker_args)
 
     try:
-        task = env(SCENARIO_NAME, problem_id=problem_id, validate_mode=validate_mode)
+        task = env(scenario_id, validate_mode=validate_mode, hints_enabled=hints_enabled)
         async with hud.eval(task, trace=True, quiet=True) as ctx:
             agent = ClaudeAgent.create(model="claude-sonnet-4-5")
             await agent.run(ctx, max_steps=0)
         reward = ctx.reward
     except Exception as exc:
         logger.error(f"Validation error for {label}: {exc}")
-        return (problem_id, validate_mode, None)
+        return (scenario_id, validate_mode, None)
 
-    return (problem_id, validate_mode, reward)
+    return (scenario_id, validate_mode, reward)
 
 
 async def validate_all(
     image: str,
-    problem_ids: list[str],
+    scenario_ids: list[str],
     *,
+    hints_enabled: bool = False,
     docker_args: list[str] | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Validate all problems with both ``baseline_fail`` and ``golden_pass`` modes."""
+    """Validate all scenarios with both ``baseline_fail`` and ``golden_pass`` modes."""
     coros = [
-        validate_problem(image, pid, mode, docker_args=docker_args)
-        for pid in problem_ids
+        validate_scenario(image, sid, mode, hints_enabled=hints_enabled, docker_args=docker_args)
+        for sid in scenario_ids
         for mode in VALIDATE_MODES
     ]
     results = await asyncio.gather(*coros, return_exceptions=True)
@@ -195,8 +195,8 @@ async def validate_all(
             failed.append(f"Exception: {result}")
             continue
 
-        pid, mode, reward = result
-        desc = f"{pid} ({mode})"
+        sid, mode, reward = result
+        desc = f"{sid} ({mode})"
         if reward == 1.0:
             logger.info(f"  PASS: {desc} -> reward={reward}")
             passed.append(desc)
@@ -212,41 +212,46 @@ async def validate_all(
 # ============================================================================
 
 
-async def run_problem(
+async def run_scenario(
     image: str,
-    problem_id: str,
+    scenario_id: str,
     max_steps: int,
     *,
+    hints_enabled: bool = False,
     docker_args: list[str] | None = None,
 ) -> tuple[str, float | None]:
-    """Run an agent against a problem."""
-    logger.info(f"Running problem: {problem_id} (max_steps={max_steps})")
+    """Run an agent against a scenario."""
+    logger.info(f"Running scenario: {scenario_id} (max_steps={max_steps})")
 
     env = Environment("cua")
     env.connect_image(image, docker_args=docker_args)
 
     try:
-        task = env(SCENARIO_NAME, problem_id=problem_id)
+        task = env(scenario_id, hints_enabled=hints_enabled)
         async with hud.eval(task, trace=True) as ctx:
             agent = ClaudeAgent.create(model="claude-sonnet-4-5")
             await agent.run(ctx, max_steps=max_steps)
         reward = ctx.reward
     except Exception as exc:
-        logger.error(f"Run error for {problem_id}: {exc}")
-        return (problem_id, None)
+        logger.error(f"Run error for {scenario_id}: {exc}")
+        return (scenario_id, None)
 
-    return (problem_id, reward)
+    return (scenario_id, reward)
 
 
 async def run_all(
     image: str,
-    problem_ids: list[str],
+    scenario_ids: list[str],
     max_steps: int,
     *,
+    hints_enabled: bool = False,
     docker_args: list[str] | None = None,
 ) -> tuple[list[tuple[str, float]], list[tuple[str, float | None]]]:
-    """Run all problems concurrently with an agent."""
-    coros = [run_problem(image, pid, max_steps, docker_args=docker_args) for pid in problem_ids]
+    """Run all scenarios concurrently with an agent."""
+    coros = [
+        run_scenario(image, sid, max_steps, hints_enabled=hints_enabled, docker_args=docker_args)
+        for sid in scenario_ids
+    ]
     results = await asyncio.gather(*coros, return_exceptions=True)
 
     succeeded: list[tuple[str, float]] = []
@@ -257,13 +262,13 @@ async def run_all(
             failed.append((f"Exception: {result}", None))
             continue
 
-        pid, reward = result
+        sid, reward = result
         if reward is not None and reward > 0:
-            logger.info(f"  {pid} -> reward={reward}")
-            succeeded.append((pid, reward))
+            logger.info(f"  {sid} -> reward={reward}")
+            succeeded.append((sid, reward))
         else:
-            logger.error(f"  {pid} -> reward={reward}")
-            failed.append((pid, reward))
+            logger.error(f"  {sid} -> reward={reward}")
+            failed.append((sid, reward))
 
     return succeeded, failed
 
@@ -273,15 +278,8 @@ async def run_all(
 # ============================================================================
 
 
-def _write_json_obj(data: dict, path: str) -> None:
-    """Write a JSON object to *path* with trailing newline."""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-
-
-def _write_json_list(data: list[dict], path: str) -> None:
-    """Write a JSON list to *path* with trailing newline."""
+def _write_json(data: dict | list, path: str) -> None:
+    """Write JSON data to *path* with trailing newline."""
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
@@ -289,67 +287,21 @@ def _write_json_list(data: list[dict], path: str) -> None:
 
 def generate_json(
     image: str,
-    problem_ids: list[str],
+    scenario_ids: list[str],
 ) -> None:
-    """Generate ``problems-metadata.json`` and ``remote_tasks.json``."""
-    import tasks  # noqa: F401 — ensure all @problem() decorators run
-    from grading.spec import PROBLEM_REGISTRY
-
+    """Generate ``remote_tasks.json``."""
     # Derive env name from image (strip registry prefix)
     env_name = image.rsplit("/", 1)[-1]
 
-    # Build a lookup from problem id -> ProblemSpec
-    registry_by_id = {spec.id: spec for spec in PROBLEM_REGISTRY}
-
-    # -- problems-metadata.json --
-    problems = []
-    for pid in problem_ids:
-        spec = registry_by_id.get(pid)
-        if spec is None:
-            logger.warning(f"Problem '{pid}' not found in PROBLEM_REGISTRY")
-            continue
-        problems.append({
-            "id": spec.id,
-            "image": image,
-            "startup_command": spec.startup_command,
-            "required_tools": ["computer"],
-            "scratchpad": "allowed",
-            "metadata": {
-                "difficulty": spec.difficulty,
-                "task_type": spec.task_type,
-                "review_level": spec.review_level,
-                "description": spec.description,
-                "template": spec.template,
-            },
-        })
-    metadata = {
-        "problem_set": {
-            "owner": "hud-evals",
-            "name": "hud-evals-problems",
-            "version": "1.0.0",
-            "created_at": "2025-04-10T00:00:00Z",
-            "description": "HUD Evals Problems",
-            "metadata": {
-                "category": "spreadsheet",
-                "language": "python",
-                "difficulty": "beginner",
-            },
-            "problems": problems,
-        }
-    }
-    _write_json_obj(metadata, "problems-metadata.json")
-    logger.info(f"Generated problems-metadata.json with {len(problems)} problem(s)")
-
-    # -- remote_tasks.json (HUD format, used by hud eval) --
     remote_tasks = [
         {
             "env": {"name": env_name},
-            "scenario": SCENARIO_NAME,
-            "args": {"problem_id": pid},
+            "scenario": f"cua:{sid}",
+            "args": {},
         }
-        for pid in problem_ids
+        for sid in scenario_ids
     ]
-    _write_json_list(remote_tasks, "remote_tasks.json")
+    _write_json(remote_tasks, "remote_tasks.json")
     logger.info(f"Generated remote_tasks.json with {len(remote_tasks)} task(s)")
 
 
@@ -381,13 +333,15 @@ async def async_main(args: argparse.Namespace) -> int:
     if extra_args:
         logger.info(f"Extra args after '--': {extra_args}")
 
-    problem_ids: list[str] = args.ids or []
-    needs_problems = args.validate or args.run or args.json
-    if not problem_ids and needs_problems:
-        problem_ids = discover_problem_ids()
-        if not problem_ids:
-            logger.error("No problems found. Register problems via @problem() in tasks/.")
+    scenario_ids: list[str] = args.ids or []
+    needs_scenarios = args.validate or args.run or args.json
+    if not scenario_ids and needs_scenarios:
+        scenario_ids = discover_scenario_ids()
+        if not scenario_ids:
+            logger.error("No scenarios found. Register scenarios via @env.scenario() in tasks/.")
             return 1
+
+    hints_enabled: bool = args.hints
 
     # --- Build ---
     if args.build:
@@ -398,11 +352,11 @@ async def async_main(args: argparse.Namespace) -> int:
     # --- Validate ---
     if args.validate:
         logger.info(
-            f"Validating {len(problem_ids)} problem(s) "
+            f"Validating {len(scenario_ids)} scenario(s) "
             f"x {len(VALIDATE_MODES)} modes ..."
         )
         passed, failed = await validate_all(
-            image, problem_ids, docker_args=extra_args or None,
+            image, scenario_ids, hints_enabled=hints_enabled, docker_args=extra_args or None,
         )
 
         logger.info("")
@@ -416,23 +370,23 @@ async def async_main(args: argparse.Namespace) -> int:
     # --- Run ---
     if args.run:
         logger.info(
-            f"Running {len(problem_ids)} problem(s) "
+            f"Running {len(scenario_ids)} scenario(s) "
             f"(max_steps={args.max_steps}) ..."
         )
         succeeded, failed_runs = await run_all(
-            image, problem_ids, args.max_steps, docker_args=extra_args or None,
+            image, scenario_ids, args.max_steps, hints_enabled=hints_enabled, docker_args=extra_args or None,
         )
 
         logger.info("")
         logger.info("Run summary:")
         if succeeded:
             logger.info(f"  Succeeded ({len(succeeded)}):")
-            for pid, reward in succeeded:
-                logger.info(f"    {pid}: reward={reward}")
+            for sid, reward in succeeded:
+                logger.info(f"    {sid}: reward={reward}")
         if failed_runs:
             logger.error(f"  Failed ({len(failed_runs)}):")
-            for pid, reward in failed_runs:
-                logger.error(f"    {pid}: reward={reward}")
+            for sid, reward in failed_runs:
+                logger.error(f"    {sid}: reward={reward}")
             has_failures = True
 
     # --- Push ---
@@ -449,7 +403,7 @@ async def async_main(args: argparse.Namespace) -> int:
 
     # --- JSON ---
     if args.json:
-        generate_json(image, problem_ids)
+        generate_json(image, scenario_ids)
 
     return 1 if has_failures else 0
 
@@ -474,18 +428,19 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument(
         "--ids",
         nargs="+",
-        help="Problem IDs to validate / run (default: all registered problems)",
+        help="Scenario IDs to validate / run (default: all registered scenarios)",
     )
 
     # Action flags
     parser.add_argument("-b", "--build", action="store_true", help="Build Docker image")
     parser.add_argument("-p", "--push", action="store_true", help="Push image to registry")
-    parser.add_argument("-v", "--validate", action="store_true", help="Validate problems (baseline_fail + golden_pass)")
-    parser.add_argument("-r", "--run", action="store_true", help="Run agent against problems")
-    parser.add_argument("-j", "--json", action="store_true", help="Generate problem-metadata.json")
+    parser.add_argument("-v", "--validate", action="store_true", help="Validate scenarios (baseline_fail + golden_pass)")
+    parser.add_argument("-r", "--run", action="store_true", help="Run agent against scenarios")
+    parser.add_argument("-j", "--json", action="store_true", help="Generate remote_tasks.json")
 
     # Options
     parser.add_argument("--max-steps", type=int, default=20, help="Max agent steps for --run (default: 20)")
+    parser.add_argument("--hints", action="store_true", help="Enable hints for scenarios that support them")
 
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     if "--" in raw_argv:

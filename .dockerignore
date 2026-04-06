@@ -13,6 +13,4 @@ __pycache__/
 .DS_Store
 node_modules/
 *.md
-!README.md
 src/
-PLAN.md

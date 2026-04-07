@@ -1,67 +1,65 @@
 # CUA Environment Template
 
-A Computer Use Agent (CUA) environment for agent evaluations. Provides computer interaction (mouse, keyboard, screenshots), file editing, and a virtual desktop via xvfb/x11vnc/novnc/xfce4.
+A Computer Use Agent (CUA) environment for agent evaluations. Provides computer interaction (mouse, keyboard, screenshots), file editing, bash execution, and a virtual desktop via xvfb/x11vnc/novnc/xfce4.
 
 > **This is a template.** Before building, customize `Dockerfile.hud` and `tasks/` for your project.
 
 ## Quick Start
 
 ```bash
+# Install dependencies
 uv sync
-uv run imagectl4.py cua-template -bvr  # Build, validate, and run
+
+# Set up API keys
+cp .env.example .env  # Then edit with your keys
+
+# Build, test, and deploy
+hud build .
+hud eval . claude --all -y --max-steps 10
+hud deploy .
 ```
+
+## Prerequisites
+
+Create a `.env` file with your API keys:
+```
+HUD_API_KEY=your-hud-api-key
+ANTHROPIC_API_KEY=your-anthropic-api-key
+```
+
+Get keys from [hud.ai/project/api-keys](https://hud.ai/project/api-keys) and [console.anthropic.com](https://console.anthropic.com).
 
 ## Getting Started
 
-### Local
-
-**1. Clone and Initialize**
+### Build
 
 ```bash
-git clone https://github.com/hud-evals/cua-template
-cd cua-template
-uv sync
+hud build .
 ```
 
-**2. Build, Validate, and Run**
+### Run Locally
 
 ```bash
-# Build the Docker image
-uv run imagectl4.py cua-template -b
+# Run with a Claude agent
+hud eval . claude --all -y --max-steps 10
 
-# Validate that your task scenarios and grading are correct
-uv run imagectl4.py cua-template -v
-
-# Run an agent against scenarios
-uv run imagectl4.py cua-template -r
-
-# Or combine all three
-uv run imagectl4.py cua-template -bvr
+# View the desktop via noVNC while it runs
+# Open http://localhost:6080/vnc.html in your browser
 ```
 
-Use `--ids` to target specific scenarios:
-```bash
-uv run imagectl4.py cua-template -bvr --ids example-task
-```
-
-Enable hints for scenarios that support them:
-```bash
-uv run imagectl4.py cua-template -r --hints
-```
-
-### Remote
-
-Deploy to [hud.ai](https://hud.ai):
+### Deploy
 
 ```bash
 hud deploy .
+hud sync tasks my-taskset-name
+hud eval my-taskset-name claude --all -y --remote
 ```
 
 ## Key Concepts
 
 ### Virtual Desktop Stack
 
-The environment runs a full virtual desktop using [dinit](https://github.com/davmac314/dinit) for process management:
+The environment runs a full virtual desktop managed by [dinit](https://github.com/davmac314/dinit):
 
 | Service | Purpose |
 |---------|---------|
@@ -69,80 +67,100 @@ The environment runs a full virtual desktop using [dinit](https://github.com/dav
 | `x11vnc` | VNC server for remote desktop access |
 | `websockify` | WebSocket-to-VNC proxy on port 6080 (noVNC web access) |
 | `xfce4_session` | XFCE desktop environment |
+| `chromium` | Chromium browser (auto-starts with desktop) |
 | `mk_xauth` | X authority setup (one-time) |
 
-Resolution is configurable via `COMPUTER_WIDTH_PX` and `COMPUTER_HEIGHT_PX` environment variables (default: 1280x800).
+View the desktop at **http://localhost:6080/vnc.html** during local eval runs.
 
-### Tools (in `env.py`)
+### Tools
 
-```python
-@env.tool()
-async def computer(action: str, ...) -> list:
-    """Mouse, keyboard, and screenshot interaction."""
+Tools are provided by the HUD SDK:
 
-@env.tool(name="str_replace_editor")
-async def str_replace_editor(command: str, path: str, ...) -> str:
-    """View, create, and edit files."""
-```
+| Tool | SDK Class | Purpose |
+|------|-----------|---------|
+| `computer` | `AnthropicComputerTool` | Mouse, keyboard, and screenshot interaction |
+| `bash` | `BashTool` | Persistent bash shell session |
+| `editor` | `EditTool` | View, create, and edit files |
 
-### Tasks (in `tasks/*.py`)
+### Scenarios (in `env.py`)
 
-Each task is a self-contained scenario that owns its setup, prompt, and grading:
+Scenarios define the agent workflow — setup, prompt, and grading:
 
 ```python
-from env import ValidateMode, env, make_prompt, setup_task
-from grading import BashGrader, Grade, SubScore
-from hud.native.graders import exact_match
+from hud.native.graders import BashGrader, Grade
 
 @env.scenario("my-task")
-async def my_task(validate_mode: ValidateMode | None = None):
-    await setup_task()
-    prompt = make_prompt("Description of what the agent should do.")
-    answer = yield prompt
+async def my_task(url: str = "https://example.com"):
+    await setup_task()  # Starts desktop services
+    prompt = make_prompt(f"Navigate to {url} in the browser.")
+    _ = yield prompt
 
-    # Async graders run in parallel via Grade.gather()
     yield await Grade.gather(
-        BashGrader.grade(weight=0.5, command="test -f /home/ubuntu/output.txt"),
-        SubScore(name="answer", value=exact_match(answer, "expected"), weight=0.5),
+        BashGrader.grade(weight=1.0, name="check", command="pgrep -f chromium"),
     )
 ```
 
-### Dinit Service Management
+### Tasks (in `tasks/<name>/task.py`)
 
-Services are defined in `dinit.d/` and managed by a Python reimplementation (`manual_dinit.py`).
+Tasks are concrete instances of scenarios with validation:
 
-## Generate Task JSON
+```python
+from hud import Environment
+from hud.eval.task import Task
+from hud.types import MCPToolCall
 
-```bash
-uv run imagectl4.py -j              # all scenarios
-uv run imagectl4.py -j --ids my-task # specific scenarios
+env = Environment("cua-template")
+env.connect_image("cua-template:latest")
+
+task = Task(env=env, scenario="open-website", args={"url": "https://www.wikipedia.org"})
+task.slug = "my-task-slug"
+task.validation = [
+    MCPToolCall(name="bash", arguments={"command": "sleep 5"}),
+]
 ```
+
+### Dual-Mode Operation
+
+The environment runs in two modes controlled by `MCP_TESTING_MODE`:
+
+| Mode | Tools Registered | Used By |
+|------|-----------------|---------|
+| `MCP_TESTING_MODE=1` | `computer`, `bash`, `editor` | HUD platform, local dev |
+| `MCP_TESTING_MODE=0` | `setup_problem`, `grade_problem` | External orchestrators |
+
+Both modes share the same scenario definitions.
 
 ## Structure
 
 ```
 cua-template/
-├── env.py              # Tools + scenario helpers
+├── env.py              # Environment: tools, scenarios, dual-mode registration
 ├── cli.py              # MCP server entry point
-├── tools/              # computer, editor, bash
 ├── grading/            # Custom graders (extends hud.native.graders)
-├── tasks/              # Scenario definitions
-├── dinit.d/            # Service definitions (xvfb, x11vnc, etc.)
+├── tasks/
+│   └── open_website/   # Example task
+│       ├── __init__.py
+│       └── task.py     # Task definition with validation
+├── dinit.d/            # Service definitions (xvfb, x11vnc, chromium, etc.)
 ├── dinit_setup.py      # Dinit startup logic
 ├── manual_dinit.py     # Python dinit implementation
-├── imagectl4.py        # Build/validate/run orchestration
+├── entrypoint.sh       # Container entrypoint (starts desktop before MCP server)
 ├── local_test.py       # Dev testing
 └── Dockerfile.hud      # Container config
 ```
 
-## Build Arguments
+## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `COMPUTER_WIDTH_PX` | `1280` | Virtual display width |
 | `COMPUTER_HEIGHT_PX` | `800` | Virtual display height |
+| `DISPLAY_WIDTH` | `1280` | SDK coordinate scaling width (must match `COMPUTER_WIDTH_PX`) |
+| `DISPLAY_HEIGHT` | `800` | SDK coordinate scaling height (must match `COMPUTER_HEIGHT_PX`) |
 | `DISPLAY_NUM` | `1` | X display number |
+| `MCP_TESTING_MODE` | `1` | Tool registration mode (`1` = agent tools, `0` = platform tools) |
 
 ## Further Reading
 
-- **[Full Documentation](https://docs.hud.ai)** - HUD platform documentation
+- **[HUD Documentation](https://docs.hud.ai)** - Full platform documentation
+- **[HUD Python SDK](https://github.com/hud-evals/hud-python)** - SDK source and examples

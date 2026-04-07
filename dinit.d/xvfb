@@ -1,5 +1,5 @@
 type = process
-command = sudo -E -u ubuntu Xvfb :1 -screen 0 ${COMPUTER_WIDTH_PX:-1400}x${COMPUTER_HEIGHT_PX:-850}x24 -fbdir /var/tmp
+command = sudo -E -u ubuntu Xvfb :1 -screen 0 ${COMPUTER_WIDTH_PX:-1280}x${COMPUTER_HEIGHT_PX:-800}x24 -fbdir /var/tmp
 logfile = /var/log/dinit/xvfb.log
 smooth-recovery = true
 restart = true

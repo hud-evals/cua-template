@@ -1,11 +1,25 @@
-"""Task definitions for CUA environment.
+"""Task auto-discovery.
 
-Tasks are scenarios registered via @env.scenario when imported.
+Each subdirectory under tasks/ is a task package with a task.py that
+exports a Task object. This module discovers them all at import time.
 """
 
-# Import task modules to register their scenarios
-from . import basic  # noqa: F401
+import importlib
+import pkgutil
 
-# Add more task modules here as needed:
-# from . import medium  # noqa: F401
-# from . import hard  # noqa: F401
+from hud.eval.task import Task
+
+tasks: dict[str, Task] = {}
+task_ids: dict[str, str] = {}
+
+for _info in pkgutil.iter_modules(__path__, __name__ + "."):
+    if not _info.ispkg:
+        continue
+    mod = importlib.import_module(_info.name)
+    pkg_name = _info.name.rsplit(".", 1)[-1]
+    for _attr_name, attr in vars(mod).items():
+        if isinstance(attr, Task):
+            tasks[pkg_name] = attr
+            task_slug = getattr(attr, "slug", None)
+            if isinstance(task_slug, str) and task_slug:
+                task_ids[pkg_name] = task_slug

@@ -26,7 +26,7 @@ IMAGE = "cua-template"
 async def test_tools():
     """Test standalone tools without running a scenario."""
     print("=== Test: Standalone Tools ===")
-    env = Environment("cua")
+    env = Environment("cua-template")
     env.connect_image(IMAGE)
 
     async with env:
@@ -35,12 +35,12 @@ async def test_tools():
 
 
 async def test_scenario():
-    """Test the example-task scenario."""
-    print("=== Test: example-task ===")
-    env = Environment("cua")
+    """Test the open-website scenario."""
+    print("=== Test: open-website ===")
+    env = Environment("cua-template")
     env.connect_image(IMAGE)
 
-    task = env("example-task")
+    task = env("open-website")
     async with hud.eval(task, trace=True) as ctx:
         agent = ClaudeAgent.create(model="claude-sonnet-4-5")
         await agent.run(ctx, max_steps=10)

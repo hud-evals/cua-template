@@ -1,0 +1,4 @@
+type = process
+command = /usr/bin/chromium --no-sandbox --disable-gpu --disable-dev-shm-usage --no-first-run --start-maximized about:blank
+depends-on = xvfb
+logfile = /var/log/dinit/chromium.log

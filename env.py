@@ -4,240 +4,198 @@ This environment provides tools for:
 - Computer interaction (mouse, keyboard, screenshots) via xvfb/x11vnc/novnc/xfce4
 - File editing with str_replace_editor
 - Bash command execution
+
+Tool registration is dual-mode:
+- MCP_TESTING_MODE=1 (default in Docker): registers agent-facing tools (computer, bash, editor)
+- MCP_TESTING_MODE=0: registers platform orchestration tools (setup_problem, grade_problem)
 """
-import json
+
 import logging
+import os
+from typing import Literal
 
 from hud import Environment
 
 from dinit_setup import start_dinit
-from grading.spec import PROBLEM_REGISTRY, EnvironmentState, Grade, ProblemSpec
-from tools import ComputerTool, EditTool, ToolError
-from tools.computer import Action, ScrollDirection
 
 logger = logging.getLogger(__name__)
 
+MCP_TESTING_MODE = os.environ.get("MCP_TESTING_MODE") in ["1", "true"]
+
 # Create the environment
-env = Environment("cua")
-
-# Tool instances
-_computer_tool: ComputerTool | None = None
-_edit_tool: EditTool | None = None
-
-
-@env.initialize
-async def initialize() -> None:
-    """Initialize the CUA environment tools."""
-    global _computer_tool, _edit_tool
-
-    logger.info("Initializing CUA environment")
-    _computer_tool = ComputerTool()
-    _edit_tool = EditTool()
-    logger.info("CUA environment initialized")
-
-
-@env.shutdown
-async def shutdown() -> None:
-    """Clean up the CUA environment."""
-    global _computer_tool, _edit_tool
-    _computer_tool = None
-    _edit_tool = None
-    logger.info("CUA environment shut down")
+env = Environment("cua-template")
 
 
 # ============================================================================
-# Agent-Visible Tools
+# Agent-Visible Tools (MCP_TESTING_MODE=1)
 # ============================================================================
 
+if MCP_TESTING_MODE:
+    from hud.tools.coding import BashTool, EditTool
+    from hud.tools.computer import AnthropicComputerTool
 
-@env.tool()
-async def computer(
-    *,
-    action: Action,
-    text: str | None = None,
-    coordinate: tuple[int, int] | None = None,
-    start_coordinate: tuple[int, int] | None = None,
-    duration: int | float | None = None,
-    scroll_direction: ScrollDirection | None = None,
-    scroll_amount: int | None = None,
-) -> list:
-    """Interact with the screen, keyboard, and mouse of the current computer.
+    DISPLAY_WIDTH = int(os.environ.get("DISPLAY_WIDTH", os.environ.get("COMPUTER_WIDTH_PX", "1280")))
+    DISPLAY_HEIGHT = int(os.environ.get("DISPLAY_HEIGHT", os.environ.get("COMPUTER_HEIGHT_PX", "800")))
 
-    Args:
-        action: The action to perform (screenshot, key, type, left_click, etc.)
-        text: Text to type or key to press
-        coordinate: (x, y) coordinate for click/move actions
-        start_coordinate: Starting (x, y) for drag actions
-        duration: Duration in seconds for hold_key/wait actions
-        scroll_direction: Direction to scroll (up, down, left, right)
-        scroll_amount: Number of scroll clicks
-
-    Returns:
-        List of ImageContent and TextContent blocks
-    """
-    if _computer_tool is None:
-        return []
-
-    return await _computer_tool(
-        action=action,
-        text=text,
-        coordinate=coordinate,
-        start_coordinate=start_coordinate,
-        duration=duration,
-        scroll_direction=scroll_direction,
-        scroll_amount=scroll_amount,
+    computer_tool = AnthropicComputerTool(
+        display_num=int(os.environ.get("DISPLAY_NUM", "1")),
+        width=DISPLAY_WIDTH,
+        height=DISPLAY_HEIGHT,
     )
+    bash_tool = BashTool()
+    edit_tool = EditTool()
 
-
-@env.tool(
-    name="str_replace_editor",
-    description="Create and edit files using str_replace_editor. Please use absolute paths for all file names.",
-)
-async def str_replace_editor(
-    *,
-    command: str,
-    path: str,
-    file_text: str | None = None,
-    view_range: list[int] | None = None,
-    old_str: str | None = None,
-    new_str: str | None = None,
-    insert_line: int | None = None,
-) -> str:
-    """Create and edit files using str_replace_editor.
-
-    Args:
-        command: One of 'view', 'create', 'str_replace', 'insert', 'undo_edit'
-        path: Absolute path to the file
-        file_text: Content for 'create' command
-        view_range: [start_line, end_line] for 'view' command
-        old_str: String to replace for 'str_replace' command
-        new_str: Replacement string for 'str_replace' or 'insert'
-        insert_line: Line number for 'insert' command
-
-    Returns:
-        The command result or file content
-    """
-    if _edit_tool is None:
-        return "Error: Editor tool not initialized"
-
-    try:
-        result = await _edit_tool(
-            command=command,
-            path=path,
-            file_text=file_text,
-            view_range=view_range,
-            old_str=old_str,
-            new_str=new_str,
-            insert_line=insert_line,
-        )
-        if result.error:
-            return f"Error: {result.error}"
-        return result.output or ""
-    except ToolError as e:
-        return f"Error: {e.message}"
-
-
-@env.tool()
-async def setup_problem(*, problem_id: str) -> str:
-    """Set up the environment for a problem: start services and return the problem statement.
-
-    Args:
-        problem_id: The ID of the problem to set up.
-
-    Returns:
-        The problem statement for the agent to solve.
-    """
-    return await setup_problem_impl(problem_id)
-
-
-@env.tool()
-async def grade_problem(*, problem_id: str) -> str:
-    """Grade the current state of the environment for a problem.
-
-    Args:
-        problem_id: The ID of the problem to grade.
-
-    Returns:
-        JSON string with score, subscores, weights, and metadata.
-    """
-
-    grade = grade_problem_impl(problem_id)
-    return json.dumps({
-        "score": float(grade.score),
-        "subscores": grade.subscores,
-        "weights": grade.weights,
-        "metadata": grade.metadata,
-    })
+    env.add_tool(computer_tool.mcp)
+    env.add_tool(bash_tool.mcp)
+    env.add_tool(edit_tool.mcp)
 
 
 # ============================================================================
-# Scenario Helpers (called by @env.scenario functions in tasks/)
+# Platform Orchestration Tools (MCP_TESTING_MODE=0)
 # ============================================================================
 
+if not MCP_TESTING_MODE:
 
-template = """
-Use computer use tools to complete the following task:
+    @env.tool(output_schema=None)
+    async def setup_problem(problem_id: str, task_prompt: str | None = None) -> str:
+        """Setup the environment for the given task id."""
+        logger.info("setup_problem called: %s", problem_id)
 
-First, login into the app using the following credentials:
-Username: admin
-Password: adminadmin
+        if problem_id not in env._scenarios:
+            return f"Unknown problem_id: {problem_id}. Known: {list(env._scenarios.keys())}"
 
-<STATEMENT>
-"""
+        prompt = await env.run_scenario_setup(problem_id, {})
+        if prompt is None:
+            return f"Scenario '{problem_id}' setup returned no prompt"
+
+        return task_prompt or prompt
+
+    @env.tool(output_schema=None)
+    async def grade_problem(problem_id: str, transcript: str = "") -> dict:
+        """Grade the problem by running the scenario's evaluate phase."""
+        logger.info("grade_problem called: %s", problem_id)
+
+        await env.submit(problem_id, transcript)
+        result = await env.run_scenario_evaluate(problem_id)
+
+        if result is None:
+            return {
+                "subscores": {"task_pass": 0.0},
+                "weights": {"task_pass": 1},
+                "metadata": {"error": "evaluation failed"},
+            }
+
+        subscores = {}
+        weights = {}
+        if result.subscores:
+            for ss in result.subscores:
+                subscores[ss.name] = ss.value
+                weights[ss.name] = ss.weight
+        else:
+            subscores["task_pass"] = result.reward
+            weights["task_pass"] = 1
+
+        return {
+            "subscores": subscores,
+            "weights": weights,
+            "metadata": {"score": result.reward, **(result.info or {})},
+        }
 
 
-def generate_statement_from_spec(spec: ProblemSpec) -> str:
-    return spec.description
+# ============================================================================
+# Scenario Helpers
+# ============================================================================
+
+ValidateMode = Literal["baseline_fail", "golden_pass"]
 
 
-def _get_spec(problem_id: str) -> ProblemSpec:
-    """Look up a problem spec by id."""
-    for spec in PROBLEM_REGISTRY:
-        if spec.id == problem_id:
-            return spec
-    raise ValueError(f"No problem found for id: {problem_id}")
+_dinit_started = False
 
 
-async def setup_problem_impl(problem_id: str) -> str:
-    """Start the environment and return the problem statement.
+async def setup_task() -> None:
+    """Start the dinit services (virtual desktop stack).
 
-    This is the implementation behind the old setup_problem MCP tool.
-    Called by @env.scenario generators.
+    Safe to call multiple times — only starts once.
     """
-    spec = _get_spec(problem_id)
-
-    logger.info("=== SETUP_PROBLEM for %s ===", problem_id)
-
-    # Start the dinit services
+    global _dinit_started
+    if _dinit_started:
+        return
+    logger.info("Starting dinit services")
     await start_dinit()
+    _dinit_started = True
     logger.info("Dinit services started")
 
-    # Run the setup function
-    if spec.setup:
-        logger.info("Calling setup function with template: %s", spec.template)
-        await spec.setup(spec.template)
-        logger.info("Setup function completed")
-    else:
-        logger.warning("No setup function found for %s", problem_id)
 
-    # Create the full statement
-    statement = generate_statement_from_spec(spec)
-    return template.replace("<STATEMENT>", statement)
+def make_prompt(description: str) -> str:
+    """Format a task description into an agent prompt."""
+    return f"Use computer use tools to complete the following task:\n\n{description}"
 
 
-def grade_problem_impl(problem_id: str) -> Grade:
-    """Grade the problem and return a Grade object.
+# ============================================================================
+# Scenarios
+# ============================================================================
 
-    This is the implementation behind the old grade_problem MCP tool.
-    Called by @env.scenario generators.
+
+@env.scenario("cua-task")
+async def cua_task(
+    prompt: str,
+    bash_checks: list[dict] | None = None,
+    grading_criteria: list[str] | None = None,
+    validate_mode: ValidateMode | None = None,
+):
+    """General CUA task scenario.
+
+    Boots the desktop, presents the prompt, then grades using any combination
+    of deterministic bash checks and LLM-based rubric criteria.
+
+    Args:
+        prompt: The task instruction shown to the agent.
+        bash_checks: Optional list of {"name": str, "command": str, "weight": float}
+                     dicts for deterministic shell-based grading.
+        grading_criteria: Optional list of rubric strings for LLM judge grading.
+        validate_mode: Used by validation (baseline_fail / golden_pass).
     """
-    spec = _get_spec(problem_id)
-    state = EnvironmentState("")
-    return spec.solution_fn(state)
+    from hud.native.graders import BashGrader, Grade, LLMJudgeGrader
+    from hud.tools.types import SubScore
+
+    await setup_task()
+
+    answer = yield make_prompt(prompt)
+
+    # Build grader list from bash_checks and/or grading_criteria
+    graders = []
+
+    if bash_checks:
+        for check in bash_checks:
+            graders.append(
+                BashGrader.grade(
+                    name=check["name"],
+                    weight=check.get("weight", 1.0),
+                    command=check["command"],
+                )
+            )
+
+    if grading_criteria:
+        criteria = [(c, 1.0) for c in grading_criteria]
+        graders.append(
+            LLMJudgeGrader.grade(
+                name="llm_judge",
+                weight=sum(c.get("weight", 1.0) for c in (bash_checks or [])) * 2 or 1.0,
+                answer=str(answer),
+                question=prompt,
+                criteria=criteria,
+            )
+        )
+
+    if not graders:
+        # Fallback: just check the desktop is running
+        graders.append(SubScore(name="desktop_running", value=1.0, weight=1.0))
+
+    yield await Grade.gather(*graders)
 
 
 # ============================================================================
-# Import and register all scenarios from tasks/
+# Import task definitions (auto-discovers tasks/<name>/task.py)
 # ============================================================================
 
-import tasks  # noqa: E402, F401 - registers scenarios
+import tasks  # noqa: E402, F401

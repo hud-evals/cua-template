@@ -6,8 +6,19 @@ __pycache__/
 .venv/
 *.egg-info/
 
-# Environment variables
-.env*.local
+# Environment variables / secrets
+.env
+.env.*
+!.env.example
+
+# HUD generated files
+.hud/
+hud.lock.yaml
+.hud_eval.toml
+remote_tasks.json
+
+# Ruff cache
+.ruff_cache/
 
 # Log files
 *.log
@@ -26,10 +37,6 @@ __pycache__/
 
 # Database
 *.sqlite
-
-# Generated files
-problems-metadata.json
-remote_tasks.json
 
 # Node (if applicable)
 node_modules/

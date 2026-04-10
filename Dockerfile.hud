@@ -1,31 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # =============================================================================
-# Stage 1: Build dinit from source
-# =============================================================================
-FROM debian:trixie AS cpp_builder
-
-RUN apt-get update -y \
-  && apt-get install -y --no-install-recommends \
-  git \
-  g++ \
-  make \
-  cmake \
-  m4 \
-  openssl \
-  ca-certificates \
-  sudo
-
-RUN update-ca-certificates
-
-# git clone dinit
-RUN git clone https://github.com/davmac314/dinit --depth 1
-
-# build dinit
-RUN cd dinit && make && make install
-
-# =============================================================================
-# Stage 2: Desktop environment setup
+# Stage 1: Desktop environment setup
 # =============================================================================
 FROM ubuntu:24.04 AS setup
 
@@ -59,6 +35,7 @@ RUN apt-get update -y \
   python3-venv \
   python3-wheel \
   scrot \
+  software-properties-common \
   sqlite3 \
   sudo \
   unzip \
@@ -75,8 +52,27 @@ RUN apt-get update -y \
 
 RUN update-ca-certificates
 
-# Copy dinit binary from builder stage
-COPY --from=cpp_builder /usr/bin/dinit /usr/local/bin/dinit
+# Install real Chromium from PPA (Ubuntu 24.04 only ships snap stubs that don't work in Docker)
+RUN add-apt-repository ppa:xtradeb/apps -y \
+  && apt-get update -y \
+  && apt-get install -y chromium \
+  && rm -rf /var/lib/apt/lists/*
+
+# Remove snap stubs that don't work in Docker
+RUN apt-get purge -y firefox chromium-browser 2>/dev/null; true
+
+# Configure Chromium for Docker: disable sandbox, set policies
+RUN echo "export CHROMIUM_FLAGS=--no-sandbox" >> /etc/chromium.d/default-flags
+RUN mkdir -p /etc/chromium/policies/managed && \
+    echo '{"DnsOverHttpsMode":"off","DefaultPopupsSetting":1,"SafeBrowsingProtectionLevel":1}' \
+    > /etc/chromium/policies/managed/policy.json
+
+# Set Chromium as default browser for XFCE and XDG
+RUN mkdir -p /etc/xdg/xfce4 && \
+    printf 'WebBrowser=chromium\n' > /etc/xdg/xfce4/helpers.rc && \
+    mkdir -p /etc/xdg && \
+    printf '[Default Applications]\ntext/html=chromium.desktop\nx-scheme-handler/http=chromium.desktop\nx-scheme-handler/https=chromium.desktop\n' \
+    > /etc/xdg/mimeapps.list
 
 ENV HOME=/home/ubuntu \
     DEBIAN_FRONTEND=noninteractive \
@@ -89,6 +85,13 @@ EXPOSE 6080
 # Suppress AT-SPI errors in Xfce
 ENV NO_AT_BRIDGE=1
 
+# Remove XFCE plugins that crash in Docker and cause popup dialogs
+RUN apt-get purge -y xfce4-notifyd xfce4-statusnotifier-plugin 2>/dev/null; \
+    rm -f /usr/lib/x86_64-linux-gnu/xfce4/panel/plugins/libsystray.so \
+          /usr/lib/x86_64-linux-gnu/xfce4/panel/plugins/libstatusnotifier.so \
+          /usr/lib/x86_64-linux-gnu/xfce4/panel/plugins/libnotification-plugin.so \
+    2>/dev/null; true
+
 # Create .cache and .config directories owned by ubuntu
 RUN mkdir -p /home/ubuntu/.cache && chown -R ubuntu:ubuntu /home/ubuntu/.cache
 RUN mkdir -p /home/ubuntu/.config && chown -R ubuntu:ubuntu /home/ubuntu/.config
@@ -99,9 +102,14 @@ WORKDIR /
 COPY dinit.d/ /etc/dinit.d/
 RUN mkdir -p /var/log/dinit && chmod 755 /var/log/dinit
 
+# MCP_TESTING_MODE controls tool registration:
+#   "1" (default) = agent tools (computer, bash, editor)
+#   "0"           = platform orchestration tools (setup_problem, grade_problem)
+ARG MCP_TESTING_MODE="1"
+ENV MCP_TESTING_MODE=${MCP_TESTING_MODE}
 
 # =============================================================================
-# Stage 3: HUD Environment Setup
+# Stage 2: HUD Environment Setup
 # =============================================================================
 FROM setup AS runtime
 
@@ -110,7 +118,7 @@ RUN pip install uv --break-system-packages
 
 # Copy the environment structure
 COPY ./pyproject.toml /mcp_server/pyproject.toml
-COPY ./README.md /mcp_server/README.md
+COPY ./uv.lock /mcp_server/uv.lock
 WORKDIR /mcp_server
 
 ENV RUST_LOG=warn
@@ -123,14 +131,14 @@ COPY ./env.py /mcp_server/env.py
 COPY ./cli.py /mcp_server/cli.py
 COPY ./dinit_setup.py /mcp_server/dinit_setup.py
 COPY ./manual_dinit.py /mcp_server/manual_dinit.py
-COPY ./step.py /mcp_server/step.py
-COPY ./tools /mcp_server/tools
 COPY ./grading /mcp_server/grading
 COPY ./tasks /mcp_server/tasks
 
-# Resolution environment variables
+# Resolution environment variables — must be consistent across all settings
 ENV COMPUTER_WIDTH_PX=1280
 ENV COMPUTER_HEIGHT_PX=800
+ENV DISPLAY_WIDTH=1280
+ENV DISPLAY_HEIGHT=800
 ENV DISPLAY_NUM=1
 
 # Screenshot and downloads directories
@@ -138,10 +146,19 @@ RUN mkdir -p /home/ubuntu/screenshots && chmod 777 /home/ubuntu/screenshots
 ENV SCREENSHOT_DIR=/home/ubuntu/screenshots
 RUN mkdir -p /home/ubuntu/Downloads && chmod 777 /home/ubuntu/Downloads
 
-RUN chmod 777 /root
+# Security: agent cannot read grading logic or scenario internals
+# The MCP server runs as root; agent tools demote to uid 1000 (ubuntu)
+RUN chmod 700 /mcp_server/env.py /mcp_server/tasks /mcp_server/grading
 
-# PROBLEM_ID is set at runtime via scenario args, not at build time
-ENV PROBLEM_ID=""
+# Required env vars — the platform injects these at runtime.
+# These are declared in the scenario's required_env_vars, not in the Dockerfile.
+# See: @env.scenario("cua-task", required_env_vars=["HUD_API_KEY", "ANTHROPIC_API_KEY"])
+
+ENV _HUD_DEV_CHILD=1
+
+# Entrypoint starts desktop services (dinit) before the main command
+COPY --chmod=755 ./entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
 
 # Run the HUD MCP server
 CMD ["hud", "dev", "env:env", "--stdio"]

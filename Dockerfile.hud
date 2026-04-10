@@ -150,10 +150,9 @@ RUN mkdir -p /home/ubuntu/Downloads && chmod 777 /home/ubuntu/Downloads
 # The MCP server runs as root; agent tools demote to uid 1000 (ubuntu)
 RUN chmod 700 /mcp_server/env.py /mcp_server/tasks /mcp_server/grading
 
-# Required env vars — the platform injects these at runtime
-# (ENV with empty value signals the platform to provide them)
-ENV HUD_API_KEY=
-ENV ANTHROPIC_API_KEY=
+# Required env vars — the platform injects these at runtime.
+# These are declared in the scenario's required_env_vars, not in the Dockerfile.
+# See: @env.scenario("cua-task", required_env_vars=["HUD_API_KEY", "ANTHROPIC_API_KEY"])
 
 ENV _HUD_DEV_CHILD=1
 

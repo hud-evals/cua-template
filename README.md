@@ -11,16 +11,8 @@ uv sync
 cp .env.example .env  # Then add your API keys
 
 hud build .
-hud eval . claude --all -y --max-steps 15
-hud deploy .
-```
-
-## Prerequisites
-
-Create a `.env` file with your API keys:
-```
-HUD_API_KEY=your-hud-api-key
-ANTHROPIC_API_KEY=your-anthropic-api-key
+hud deploy
+hud sync tasks <taskset name>
 ```
 
 Get keys from [hud.ai/project/api-keys](https://hud.ai/project/api-keys) and [console.anthropic.com](https://console.anthropic.com).
@@ -33,23 +25,16 @@ Get keys from [hud.ai/project/api-keys](https://hud.ai/project/api-keys) and [co
 hud build .
 ```
 
-### Run Locally
-
-```bash
-# Run with a Claude agent (view desktop at http://localhost:6080/vnc.html)
-hud eval . claude --all -y --max-steps 15
-
-# Validate with golden solutions (no LLM needed)
-hud eval . integration_test --all -y
-```
-
 ### Deploy
 
 ```bash
 hud deploy .
-hud sync tasks my-taskset-name
+hud sync tasks <my-taskset-name>
 hud eval my-taskset-name claude --all -y --remote
+or just run the tasks directly from the HUD UI in the taskset view
 ```
+
+> **Important:** After deploying, set `HUD_API_KEY` and `ANTHROPIC_API_KEY` in your environment's settings on [hud.ai](https://hud.ai). These are needed at runtime for LLM-based grading. Note: keys may be cleared after each deploy — re-add them if grading fails with "Resource not found."
 
 ## Key Concepts
 
@@ -132,7 +117,7 @@ Tools are provided by the HUD SDK:
 cua-template/
 ├── env.py                      # Environment: tools, scenario, dual-mode
 ├── cli.py                      # MCP server entry point
-├── grading/                    # Custom graders (extends hud.native.graders)
+├── grading/                    # Re-exports SDK graders (BashGrader, LLMJudgeGrader, etc.)
 ├── tasks/
 │   ├── open_website/task.py    # Browser navigation + LLM grading
 │   ├── create_document/task.py # File creation + bash grading
@@ -158,3 +143,4 @@ cua-template/
 
 - **[HUD Documentation](https://docs.hud.ai)**
 - **[HUD Python SDK](https://github.com/hud-evals/hud-python)**
+- **[HUD Skills](https://github.com/hud-evals/skills)**

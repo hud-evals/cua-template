@@ -136,7 +136,7 @@ def make_prompt(description: str) -> str:
 # ============================================================================
 
 
-@env.scenario("cua-task", required_env_vars=["HUD_API_KEY", "ANTHROPIC_API_KEY"])
+@env.scenario("cua-task")
 async def cua_task(
     prompt: str,
     bash_checks: list[dict] | None = None,

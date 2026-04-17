@@ -1,18 +1,11 @@
-"""CUA environment - tools for solving computer-use tasks.
+"""CUA environment — virtual desktop for computer-use agents.
 
-This environment provides tools for:
-- Computer interaction (mouse, keyboard, screenshots) via xvfb/x11vnc/novnc/xfce4
-- File editing with str_replace_editor
-- Bash command execution
-
-Tool registration is dual-mode:
-- MCP_TESTING_MODE=1 (default in Docker): registers agent-facing tools (computer, bash, editor)
-- MCP_TESTING_MODE=0: registers platform orchestration tools (setup_problem, grade_problem)
+Registers `computer`, `bash`, and `editor` tools (MCP_TESTING_MODE=1, default)
+or orchestration tools `setup_problem` / `grade_problem` (MCP_TESTING_MODE=0).
 """
 
 import logging
 import os
-from typing import Literal
 
 from hud import Environment
 
@@ -26,10 +19,7 @@ MCP_TESTING_MODE = os.environ.get("MCP_TESTING_MODE") in ["1", "true"]
 env = Environment("cua-template")
 
 
-# ============================================================================
-# Agent-Visible Tools (MCP_TESTING_MODE=1)
-# ============================================================================
-
+# Agent-visible tools (MCP_TESTING_MODE=1)
 if MCP_TESTING_MODE:
     from hud.tools.coding import BashTool, EditTool
     from hud.tools.computer import AnthropicComputerTool
@@ -50,10 +40,7 @@ if MCP_TESTING_MODE:
     env.add_tool(edit_tool.mcp)
 
 
-# ============================================================================
-# Platform Orchestration Tools (MCP_TESTING_MODE=0)
-# ============================================================================
-
+# Platform orchestration tools (MCP_TESTING_MODE=0)
 if not MCP_TESTING_MODE:
 
     @env.tool(output_schema=None)
@@ -102,13 +89,6 @@ if not MCP_TESTING_MODE:
         }
 
 
-# ============================================================================
-# Scenario Helpers
-# ============================================================================
-
-ValidateMode = Literal["baseline_fail", "golden_pass"]
-
-
 _dinit_started = False
 
 
@@ -131,29 +111,23 @@ def make_prompt(description: str) -> str:
     return f"Use computer use tools to complete the following task:\n\n{description}"
 
 
-# ============================================================================
-# Scenarios
-# ============================================================================
-
-
 @env.scenario("cua-task")
 async def cua_task(
     prompt: str,
     bash_checks: list[dict] | None = None,
     grading_criteria: list[str] | None = None,
-    validate_mode: ValidateMode | None = None,
 ):
     """General CUA task scenario.
 
     Boots the desktop, presents the prompt, then grades using any combination
-    of deterministic bash checks and LLM-based rubric criteria.
+    of deterministic bash checks and LLM-based rubric criteria. Weights are
+    normalized so subscores always sum to 1.0.
 
     Args:
         prompt: The task instruction shown to the agent.
         bash_checks: Optional list of {"name": str, "command": str, "weight": float}
                      dicts for deterministic shell-based grading.
         grading_criteria: Optional list of rubric strings for LLM judge grading.
-        validate_mode: Used by validation (baseline_fail / golden_pass).
     """
     from hud.native.graders import BashGrader, Grade, LLMJudgeGrader
     from hud.tools.types import SubScore
@@ -162,7 +136,12 @@ async def cua_task(
 
     answer = yield make_prompt(prompt)
 
-    # Build grader list from bash_checks and/or grading_criteria
+    # Normalize weights to sum to 1.0
+    total = sum(c.get("weight", 1.0) for c in (bash_checks or []))
+    if grading_criteria:
+        total += 1.0
+    total = total or 1.0
+
     graders = []
 
     if bash_checks:
@@ -170,7 +149,7 @@ async def cua_task(
             graders.append(
                 BashGrader.grade(
                     name=check["name"],
-                    weight=check.get("weight", 1.0),
+                    weight=check.get("weight", 1.0) / total,
                     command=check["command"],
                 )
             )
@@ -180,7 +159,7 @@ async def cua_task(
         graders.append(
             LLMJudgeGrader.grade(
                 name="llm_judge",
-                weight=sum(c.get("weight", 1.0) for c in (bash_checks or [])) * 2 or 1.0,
+                weight=1.0 / total,
                 answer=str(answer),
                 question=prompt,
                 criteria=criteria,
@@ -188,14 +167,6 @@ async def cua_task(
         )
 
     if not graders:
-        # Fallback: just check the desktop is running
         graders.append(SubScore(name="desktop_running", value=1.0, weight=1.0))
 
     yield await Grade.gather(*graders)
-
-
-# ============================================================================
-# Import task definitions (auto-discovers tasks/<name>/task.py)
-# ============================================================================
-
-import tasks  # noqa: E402, F401

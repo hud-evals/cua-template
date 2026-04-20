@@ -131,8 +131,6 @@ COPY ./env.py /mcp_server/env.py
 COPY ./cli.py /mcp_server/cli.py
 COPY ./dinit_setup.py /mcp_server/dinit_setup.py
 COPY ./manual_dinit.py /mcp_server/manual_dinit.py
-COPY ./grading /mcp_server/grading
-COPY ./tasks /mcp_server/tasks
 
 # Resolution environment variables — must be consistent across all settings
 ENV COMPUTER_WIDTH_PX=1280
@@ -148,11 +146,7 @@ RUN mkdir -p /home/ubuntu/Downloads && chmod 777 /home/ubuntu/Downloads
 
 # Security: agent cannot read grading logic or scenario internals
 # The MCP server runs as root; agent tools demote to uid 1000 (ubuntu)
-RUN chmod 700 /mcp_server/env.py /mcp_server/tasks /mcp_server/grading
-
-# Required env vars — the platform injects these at runtime.
-# These are declared in the scenario's required_env_vars, not in the Dockerfile.
-# See: @env.scenario("cua-task", required_env_vars=["HUD_API_KEY", "ANTHROPIC_API_KEY"])
+RUN chmod 700 /mcp_server/env.py
 
 ENV _HUD_DEV_CHILD=1
 

@@ -102,35 +102,17 @@ WORKDIR /
 COPY dinit.d/ /etc/dinit.d/
 RUN mkdir -p /var/log/dinit && chmod 755 /var/log/dinit
 
-# MCP_TESTING_MODE controls tool registration:
-#   "1" (default) = agent tools (computer, bash, editor)
-#   "0"           = platform orchestration tools (setup_problem, grade_problem)
-ARG MCP_TESTING_MODE="1"
-ENV MCP_TESTING_MODE=${MCP_TESTING_MODE}
-
 # =============================================================================
 # Stage 2: HUD Environment Setup
 # =============================================================================
 FROM setup AS runtime
 
-# Install uv for dependency management
+# Install uv, then install exactly what uv.lock pins (deps + this env, editable), no dev/test.
 RUN pip install uv --break-system-packages
-
-# Copy the environment structure
-COPY ./pyproject.toml /mcp_server/pyproject.toml
-COPY ./uv.lock /mcp_server/uv.lock
 WORKDIR /mcp_server
-
 ENV RUST_LOG=warn
-RUN uv venv && . .venv/bin/activate && uv sync --no-install-project --extra dev && uv pip install -e .
-ENV PYTHONPATH=/mcp_server/.venv/lib/python3.12/site-packages:/mcp_server
-ENV PATH=/mcp_server/.venv/bin:$PATH
-
-# Copy application code
-COPY ./env.py /mcp_server/env.py
-COPY ./cli.py /mcp_server/cli.py
-COPY ./dinit_setup.py /mcp_server/dinit_setup.py
-COPY ./manual_dinit.py /mcp_server/manual_dinit.py
+COPY ./pyproject.toml ./uv.lock ./env.py ./tasks.py ./dinit_setup.py ./manual_dinit.py /mcp_server/
+RUN uv sync --frozen --no-dev || uv sync --no-dev
 
 # Resolution environment variables — must be consistent across all settings
 ENV COMPUTER_WIDTH_PX=1280
@@ -144,15 +126,15 @@ RUN mkdir -p /home/ubuntu/screenshots && chmod 777 /home/ubuntu/screenshots
 ENV SCREENSHOT_DIR=/home/ubuntu/screenshots
 RUN mkdir -p /home/ubuntu/Downloads && chmod 777 /home/ubuntu/Downloads
 
-# Security: agent cannot read grading logic or scenario internals
-# The MCP server runs as root; agent tools demote to uid 1000 (ubuntu)
-RUN chmod 700 /mcp_server/env.py
+# Security (uid wall): the agent drives the desktop as uid 1000 - the on-screen xfce terminal
+# runs as ubuntu - so hide the grading logic from it. The control-channel server runs as root
+# and reads these via the editable install; uid 1000 cannot read the 0700 source.
+RUN chmod 700 /mcp_server/env.py /mcp_server/tasks.py
 
-ENV _HUD_DEV_CHILD=1
-
-# Entrypoint starts desktop services (dinit) before the main command
+# Entrypoint boots the desktop (dinit) before the main command.
 COPY --chmod=755 ./entrypoint.sh /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 
-# Run the HUD MCP server
-CMD ["hud", "dev", "env:env", "--stdio"]
+# Serve the v6 control channel; @env.initialize publishes the rfb (VNC) screen capability.
+EXPOSE 8765
+CMD ["uv", "run", "--no-sync", "hud", "serve", "env:env", "--host", "0.0.0.0", "--port", "8765"]

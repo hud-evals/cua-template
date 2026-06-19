@@ -1,5 +1,5 @@
 type = process
-command=sudo -E -u ubuntu x11vnc -forever -shared
+command=sudo -E -u ubuntu x11vnc -forever -shared -rfbport 5900
 logfile = /var/log/dinit/x11vnc.log
 smooth-recovery = true
 restart = true

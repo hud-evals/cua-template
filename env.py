@@ -1,109 +1,71 @@
-"""CUA environment — virtual desktop for computer-use agents.
+"""CUA environment - a virtual Linux desktop served over an `rfb` (VNC) capability.
 
-Registers `computer`, `bash`, and `editor` tools (MCP_TESTING_MODE=1, default)
-or orchestration tools `setup_problem` / `grade_problem` (MCP_TESTING_MODE=0).
+The desktop (Xvfb :1 + x11vnc on VNC port 5900 + xfce4 + chromium) is booted by
+entrypoint.sh at container start; `@env.initialize` waits for the VNC port, then publishes
+the `rfb` screen so the harness's computer-use agent can drive it. Tasks grade server-side
+in this container via deterministic `BashGrader` checks plus an optional LLM judge.
 """
 
+# NOTE: do NOT add `from __future__ import annotations` here - under it a typed @env.template
+# param crashes the sync/deploy manifest path (TypeAdapter on a string forward-ref). Keep
+# annotations as real objects. (porting notes 15.E)
+import asyncio
 import logging
-import os
+import socket
 
 from hud import Environment
+from hud.capabilities import Capability
+from hud.graders import BashGrader, LLMJudgeGrader, SubScore, combine
+from hud.settings import settings
 
 from dinit_setup import start_dinit
 
 logger = logging.getLogger(__name__)
 
-MCP_TESTING_MODE = os.environ.get("MCP_TESTING_MODE") in ["1", "true"]
+env = Environment(name="cua-template")  # literal name - `hud deploy` static-parses it (15.J)
 
-# Create the environment
-env = Environment("cua-template")
-
-
-# Agent-visible tools (MCP_TESTING_MODE=1)
-if MCP_TESTING_MODE:
-    from hud.tools.coding import BashTool, EditTool
-    from hud.tools.computer import AnthropicComputerTool
-
-    DISPLAY_WIDTH = int(os.environ.get("DISPLAY_WIDTH", os.environ.get("COMPUTER_WIDTH_PX", "1280")))
-    DISPLAY_HEIGHT = int(os.environ.get("DISPLAY_HEIGHT", os.environ.get("COMPUTER_HEIGHT_PX", "800")))
-
-    computer_tool = AnthropicComputerTool(
-        display_num=int(os.environ.get("DISPLAY_NUM", "1")),
-        width=DISPLAY_WIDTH,
-        height=DISPLAY_HEIGHT,
-    )
-    bash_tool = BashTool()
-    edit_tool = EditTool()
-
-    env.add_tool(computer_tool.mcp)
-    env.add_tool(bash_tool.mcp)
-    env.add_tool(edit_tool.mcp)
+_HOST = "127.0.0.1"
+_VNC_PORT = 5900  # x11vnc serves the :1 display here (dinit.d/x11vnc pins -rfbport 5900)
 
 
-# Platform orchestration tools (MCP_TESTING_MODE=0)
-if not MCP_TESTING_MODE:
-
-    @env.tool(output_schema=None)
-    async def setup_problem(problem_id: str, task_prompt: str | None = None) -> str:
-        """Setup the environment for the given task id."""
-        logger.info("setup_problem called: %s", problem_id)
-
-        if problem_id not in env._scenarios:
-            return f"Unknown problem_id: {problem_id}. Known: {list(env._scenarios.keys())}"
-
-        prompt = await env.run_scenario_setup(problem_id, {})
-        if prompt is None:
-            return f"Scenario '{problem_id}' setup returned no prompt"
-
-        return task_prompt or prompt
-
-    @env.tool(output_schema=None)
-    async def grade_problem(problem_id: str, transcript: str = "") -> dict:
-        """Grade the problem by running the scenario's evaluate phase."""
-        logger.info("grade_problem called: %s", problem_id)
-
-        await env.submit(problem_id, transcript)
-        result = await env.run_scenario_evaluate(problem_id)
-
-        if result is None:
-            return {
-                "subscores": {"task_pass": 0.0},
-                "weights": {"task_pass": 1},
-                "metadata": {"error": "evaluation failed"},
-            }
-
-        subscores = {}
-        weights = {}
-        if result.subscores:
-            for ss in result.subscores:
-                subscores[ss.name] = ss.value
-                weights[ss.name] = ss.weight
-        else:
-            subscores["task_pass"] = result.reward
-            weights["task_pass"] = 1
-
-        return {
-            "subscores": subscores,
-            "weights": weights,
-            "metadata": {"score": result.reward, **(result.info or {})},
-        }
+# ── rfb (VNC desktop) capability lifecycle ────────────────────────────────────
 
 
-_dinit_started = False
+async def _listening(host: str, port: int, timeout: float = 30.0) -> None:
+    """Block until host:port accepts a connection (chromium + xfce boot is heavy)."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        try:
+            socket.create_connection((host, port), timeout=0.5).close()
+            return
+        except OSError:
+            await asyncio.sleep(0.2)
+    raise RuntimeError(f"VNC server never came up on {host}:{port}")
 
 
-async def setup_task() -> None:
-    """Start the dinit services (virtual desktop stack).
+@env.initialize
+async def _up() -> None:
+    # entrypoint.sh boots dinit before the control channel serves. If the VNC port is not
+    # up yet (e.g. a bare image run without the entrypoint), boot it once here. The env does
+    # not accept a client until this hook returns, so waiting for the port closes the race.
+    try:
+        socket.create_connection((_HOST, _VNC_PORT), timeout=0.5).close()
+    except OSError:
+        logger.info("VNC not up; starting dinit desktop services")
+        await start_dinit()
+    await _listening(_HOST, _VNC_PORT)
+    # display 0 -> VNC port 5900 + 0. (display is the VNC port offset, NOT the X display :1.)
+    env.add_capability(Capability.rfb(name="screen", url=f"rfb://{_HOST}", display=0))
 
-    Safe to call multiple times — only starts once.
-    """
-    global _dinit_started
-    if _dinit_started:
-        return
-    logger.info("Starting dinit services")
-    await start_dinit()
-    _dinit_started = True
-    logger.info("Dinit services started")
+
+@env.shutdown
+async def _down() -> None:
+    # The dinit-managed desktop dies with the container; nothing to tear down here.
+    logger.info("cua-template shutting down")
+
+
+# ── task ──────────────────────────────────────────────────────────────────────
 
 
 def make_prompt(description: str) -> str:
@@ -111,62 +73,60 @@ def make_prompt(description: str) -> str:
     return f"Use computer use tools to complete the following task:\n\n{description}"
 
 
-@env.scenario("cua-task")
+@env.template()
 async def cua_task(
     prompt: str,
     bash_checks: list[dict] | None = None,
     grading_criteria: list[str] | None = None,
 ):
-    """General CUA task scenario.
+    """General CUA task: present the prompt, then grade with any combination of deterministic
+    bash checks (run server-side in this container) and an LLM rubric judge.
 
-    Boots the desktop, presents the prompt, then grades using any combination
-    of deterministic bash checks and LLM-based rubric criteria. Weights are
-    normalized so subscores always sum to 1.0.
+    `combine` normalizes the positive weights to sum to 1.0, so weights are relative.
 
     Args:
         prompt: The task instruction shown to the agent.
-        bash_checks: Optional list of {"name": str, "command": str, "weight": float}
-                     dicts for deterministic shell-based grading.
-        grading_criteria: Optional list of rubric strings for LLM judge grading.
+        bash_checks: Optional list of {"name", "command", "weight"} for shell-based grading.
+        grading_criteria: Optional rubric strings for the LLM judge (needs HUD_API_KEY).
     """
-    from hud.native.graders import BashGrader, Grade, LLMJudgeGrader
-    from hud.tools.types import SubScore
-
-    await setup_task()
-
     answer = yield make_prompt(prompt)
 
-    # Normalize weights to sum to 1.0
+    # Pre-normalize weights to sum to 1.0 (bash checks + one slot for the judge) so combine's
+    # own normalization is a no-op and the displayed subscore weights read as fractions.
     total = sum(c.get("weight", 1.0) for c in (bash_checks or []))
-    if grading_criteria:
-        total += 1.0
+    total += 1.0 if grading_criteria else 0.0
     total = total or 1.0
 
-    graders = []
+    graders: list = []
 
-    if bash_checks:
-        for check in bash_checks:
-            graders.append(
-                BashGrader.grade(
-                    name=check["name"],
-                    weight=check.get("weight", 1.0) / total,
-                    command=check["command"],
-                )
-            )
-
-    if grading_criteria:
-        criteria = [(c, 1.0) for c in grading_criteria]
+    for check in bash_checks or []:
         graders.append(
-            LLMJudgeGrader.grade(
-                name="llm_judge",
-                weight=1.0 / total,
-                answer=str(answer),
-                question=prompt,
-                criteria=criteria,
+            BashGrader.grade(
+                weight=check.get("weight", 1.0) / total,
+                name=check["name"],
+                command=check["command"],
             )
         )
+
+    if grading_criteria:
+        judge_weight = 1.0 / total
+        if settings.api_key:
+            graders.append(
+                LLMJudgeGrader.grade(
+                    weight=judge_weight,
+                    name="llm_judge",
+                    answer=str(answer),
+                    question=prompt,
+                    criteria=[(c, 1.0) for c in grading_criteria],
+                )
+            )
+        else:
+            # No key (e.g. a keyless deploy): the judge can't run, so it scores 0 at its real
+            # weight instead of erroring the trace. Never re-weight the bash checks. (18.D)
+            logger.warning("No HUD_API_KEY: LLM judge skipped; it scores 0 at its weight.")
+            graders.append(SubScore(name="llm_judge", weight=judge_weight, value=0.0))
 
     if not graders:
         graders.append(SubScore(name="desktop_running", value=1.0, weight=1.0))
 
-    yield await Grade.gather(*graders)
+    yield await combine(*graders)

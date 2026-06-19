@@ -1,120 +1,84 @@
 # cua-template
 
-HUD environment template for computer-use agents. Runs a virtual Linux desktop (XFCE + Chromium) managed by [dinit](https://github.com/davmac314/dinit), and ships with a reusable `cua-task` scenario for evaluating browser and desktop workflows.
+A HUD v6 environment for **computer-use agents**: a virtual Linux desktop (XFCE + Chromium,
+managed by [dinit](https://github.com/davmac314/dinit)) served as an **`rfb` (VNC) capability**.
+The harness's computer-use agent drives the screen; tasks grade the result server-side with
+deterministic shell checks and an optional LLM judge.
 
-## Setup
+## Layout
+
+```
+env.py           the Environment: the rfb capability lifecycle + the `cua_task` template + grading
+tasks.py         the task definitions (prompts + slugs)
+dinit.d/         desktop service definitions (Xvfb, x11vnc, websockify, xfce4, chromium)
+dinit_setup.py   dinit startup wrapper       manual_dinit.py  pure-Python dinit
+entrypoint.sh    boots the desktop before the control channel serves
+Dockerfile.hud   the desktop image + the v6 control channel (`hud serve env:env`)
+```
+
+## Run
+
+Needs [uv](https://docs.astral.sh/uv/), Python 3.11/3.12, the HUD CLI, and Docker.
 
 ```bash
 uv sync
-cp .env.example .env                # fill in HUD_API_KEY (injected into the deployed container for grading)
-hud set HUD_API_KEY=your-key-here   # CLI auth, get one at hud.ai/project/api-keys
+cp .env.example .env    # HUD_API_KEY (LLM-judge grading) + ANTHROPIC_API_KEY (the computer-use agent)
 ```
 
-## Deploy & Run
+> The virtual desktop (`Xvfb`/`x11vnc`) is **Linux-only**, so the env doesn't run under
+> `--runtime local` on macOS. Run it in a Linux container.
 
 ```bash
-hud deploy .                              # deploy the environment (once)
-hud sync tasks <taskset-name>             # push tasks to a taskset (fast, re-run on every task change)
-hud eval <taskset-name> claude --remote --full
+docker build -f Dockerfile.hud -t cua-template:dev .
+docker run -d -e HUD_API_KEY=$HUD_API_KEY -p 8765:8765 cua-template:dev   # serves the env + LLM judge
+
+# Run a computer-use agent against it (see the note below on the direct key):
+HUD_API_KEY="" ANTHROPIC_API_KEY=sk-ant-... \
+  hud eval tasks.py claude --runtime tcp://127.0.0.1:8765 --max-steps 30 -y
 ```
 
-**Iteration loop:** `hud deploy` is the slow step — run it once. After that, edit `tasks.py` and re-run `hud sync tasks` (takes seconds). Only redeploy when `env.py` or the Dockerfile changes.
+**Computer-use needs a direct Anthropic key.** Anthropic's computer-use is a provider-native beta;
+the HUD gateway (the default with just `HUD_API_KEY`) doesn't forward it, so the agent must call
+Anthropic directly. The SDK prefers the gateway whenever `HUD_API_KEY` is set, so blank it for the
+agent (`HUD_API_KEY=""`) and set `ANTHROPIC_API_KEY`. The container keeps its own baked
+`HUD_API_KEY` for the LLM judge. Any computer-use model works (`claude-sonnet-4-6` default,
+`--model claude-opus-4-8` for the strongest).
 
-See [Deploy & Go Remote](https://docs.hud.ai/building/running-at-scale) for deploy flags, secrets, and auto-deploy options.
+## Tasks & grading
 
-## Scenarios and Tasks
-
-`env.py` defines one scenario, `cua-task`: it boots the desktop, runs the prompt against the agent, and grades the result using any combination of `bash_checks` and `grading_criteria`.
-
-A task is that scenario instantiated with specific arguments. Tasks live in `tasks.py` at the repo root — `hud sync tasks` picks up every `Task` object in the module:
+`env.py` defines one template, `cua_task`, instantiated per task in `tasks.py`:
 
 ```python
-# tasks.py
-from hud.types import MCPToolCall
 from env import cua_task
 
-my_task = cua_task.task(
+_my_task = cua_task(
     prompt="Navigate to example.com and report the page title.",
-    bash_checks=[
-        {"name": "browser_running", "command": "pgrep -f chromium", "weight": 0.3},
-    ],
-    grading_criteria=[
-        "The agent correctly reports the page title",
-    ],
+    bash_checks=[{"name": "browser_running", "command": "pgrep -f chromium", "weight": 0.3}],
+    grading_criteria=["The agent correctly reports the page title"],
 )
-my_task.slug = "my-task-slug"
-
-my_task.validation = [
-    MCPToolCall(name="bash", arguments={"command": "echo 'golden path here'"}),
-]
+_my_task.slug = "my-task-slug"   # unique kebab-case; add it to the `tasks` list
 ```
 
-Each task needs a unique kebab-case `slug` — it's how tasks are identified across syncs and filtered via `--task-ids`. `task.validation` is optional: a list of tool calls that make up a golden solution, replayed by the `integration_test` agent to verify the task end-to-end without an LLM.
+| Knob | Type | How it scores |
+|------|------|---------------|
+| `bash_checks` | `list[{name, command, weight}]` | shell command run in the container (the desktop the agent drove), scored by exit code |
+| `grading_criteria` | `list[str]` | rubric strings judged by an LLM (needs `HUD_API_KEY`; without it, this half scores 0) |
 
-> Renaming a slug creates a new task on the platform (the old one stays). Pick carefully.
-
-### Grading
-
-Two knobs, used alone or together. Weights are normalized so the reward stays in `[0, 1]`.
-
-| Parameter | Type | Purpose |
-|-----------|------|---------|
-| `bash_checks` | `list[{name, command, weight}]` | Shell commands, scored by exit code |
-| `grading_criteria` | `list[str]` | Rubric strings evaluated by an LLM judge |
-
-See [Native Graders](https://docs.hud.ai/reference/native-graders) for the full reference.
-
-### Included Tasks
+Weights are normalized so the reward stays in `[0, 1]`. Underscore-prefix the intermediate Task
+vars and add each to the `tasks` list (a bare module-level Task plus the list double-counts → a
+"duplicate slug" error).
 
 | Slug | Grading | What it tests |
-|------|---------|--------------|
-| `open-website-example` | bash + LLM | Browser navigation, tagline identification |
-| `create-document-example` | bash only | File creation, deterministic content check |
-| `search-wikipedia-python` | bash + LLM | Multi-step research, factual accuracy |
+|------|---------|---------------|
+| `open-website-example` | bash + LLM | browser navigation, tagline identification |
+| `create-document-example` | bash only | file creation, deterministic content check |
+| `search-wikipedia-python` | bash + LLM | multi-step research, factual accuracy |
 
-## Adding a Task
-
-1. Append a new `cua_task.task(...)` block to `tasks.py`, set a `slug`, and optionally a `validation` list.
-2. `hud sync tasks <taskset-name>` — no redeploy needed.
-
-## Structure
-
-```
-cua-template/
-├── env.py                      # Environment, scenario, grading
-├── tasks.py                    # Task definitions
-├── cli.py                      # MCP server entrypoint
-├── dinit.d/                    # Desktop service definitions
-├── dinit_setup.py              # dinit startup wrapper
-├── manual_dinit.py             # Pure-Python dinit implementation
-├── entrypoint.sh               # Container entrypoint
-└── Dockerfile.hud              # Container build
-```
-
-## Advanced
-
-### Local development
+## Tests
 
 ```bash
-hud build .   # build the image locally
-hud dev       # run it as an MCP server for Cursor / Claude Code
+uv run pytest tests/ -q   # offline: the grader composition (no desktop, no keys)
 ```
 
-See [Tasks & Evaluation](https://docs.hud.ai/building/tasks-and-evaluation) for other local run modes.
-
-### Smoke-testing tasks
-
-Replay every task's golden `validation` on HUD infrastructure — no LLM involved:
-
-```bash
-hud eval <taskset-name> integration_test --remote --full
-```
-
-All scores of 1.0 = graders and scenario still line up.
-
-## Further Reading
-
-- [HUD Documentation](https://docs.hud.ai)
-- [Scaffolding](https://docs.hud.ai/building/scaffolding) — environments, tools, scenarios
-- [Tasks & Evaluation](https://docs.hud.ai/building/tasks-and-evaluation) — local iteration
-- [Deploy & Go Remote](https://docs.hud.ai/building/running-at-scale) — platform workflows
+The end-to-end desktop check is a real `hud eval ... --runtime hud` rollout — there's no
+golden-replay smoke test (a computer-use agent drives pixels over VNC, not replayable tool calls).

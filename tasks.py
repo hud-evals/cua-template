@@ -3,6 +3,9 @@
 `hud eval tasks.py` and `hud sync tasks` collect the public `tasks` list. Add a task by
 calling `cua_task(...)`, setting a `.slug`, and adding it to the list. Verify a CUA env with a
 real `hud eval tasks.py claude --runtime hud` rollout - the rfb desktop cannot run on macOS.
+The multi-step research task wants more steps:
+
+    hud eval tasks.py claude --task-ids shannon-multistep-research -y --max-steps 100
 """
 
 from env import cua_task, env  # noqa: F401  (re-export env for `hud eval tasks.py`)
@@ -44,24 +47,50 @@ _create_document = cua_task(
 _create_document.slug = "create-document-example"
 
 
-# Multi-step research - bash + LLM grading
-_search_wikipedia = cua_task(
+# Long multi-step task: research across two Wikipedia pages, then a cross-app terminal write.
+# Exercises address-bar typing, Enter, link clicks, scrolling, multi-hop navigation, and the
+# terminal. The authored bash weights sum to 1.0; env.py adds a 1.0 slot for the judge, so the
+# final grade is a clean 0.5 bash / 0.5 judge that totals exactly 1.0:
+#   browser_running 0.1 | file_exists 0.2 | file_has_birth_year 0.1 | file_has_mit 0.1 | llm_judge 0.5
+_shannon_research = cua_task(
     prompt=(
-        "A Chromium browser is open on the desktop.\n\n"
-        "Navigate to the Wikipedia article about Python (the programming language) at:\n"
-        "https://en.wikipedia.org/wiki/Python_(programming_language)\n\n"
-        "Find who created Python and in what year it first appeared.\n"
-        "Reply with your answer as plain text."
+        "A Chromium browser and an XFCE desktop are available. Complete this "
+        "multi-step research task, using the browser and the desktop:\n\n"
+        "1. In the browser, go to https://en.wikipedia.org/wiki/Claude_Shannon "
+        "and let the page load.\n"
+        "2. Find the YEAR Claude Shannon was born.\n"
+        "3. Find the university where he earned his PhD.\n"
+        "4. Navigate to that university's own Wikipedia article.\n"
+        "5. Find the CITY and state where that university is located.\n"
+        "6. Open a terminal (right-click the desktop and choose 'Open Terminal Here', "
+        "or Applications > System) and save your findings to "
+        "/home/ubuntu/Desktop/shannon.txt, one fact per line, exactly:\n"
+        "   born: <year>\n"
+        "   phd: <university>\n"
+        "   city: <city, state>\n"
+        "7. Reply with all three facts as plain text."
     ),
     bash_checks=[
         {"name": "browser_running", "command": "pgrep -f '/usr/bin/chromium'", "weight": 0.2},
+        {"name": "file_exists", "command": "test -f /home/ubuntu/Desktop/shannon.txt", "weight": 0.4},
+        {
+            "name": "file_has_birth_year",
+            "command": "grep -q '1916' /home/ubuntu/Desktop/shannon.txt",
+            "weight": 0.2,
+        },
+        {
+            "name": "file_has_mit",
+            "command": "grep -qiE 'MIT|Massachusetts Institute' /home/ubuntu/Desktop/shannon.txt",
+            "weight": 0.2,
+        },
     ],
     grading_criteria=[
-        "The agent correctly identifies Guido van Rossum as the creator of Python",
-        "The agent mentions that Python first appeared in 1991",
+        "The agent states that Claude Shannon was born in 1916",
+        "The agent states that Shannon earned his PhD at MIT (the Massachusetts Institute of Technology)",
+        "The agent states that MIT is located in Cambridge, Massachusetts",
     ],
 )
-_search_wikipedia.slug = "search-wikipedia-python"
+_shannon_research.slug = "shannon-multistep-research"
 
 
-tasks = [_open_website, _create_document, _search_wikipedia]
+tasks = [_open_website, _create_document, _shannon_research]

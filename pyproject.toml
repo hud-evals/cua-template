@@ -5,10 +5,8 @@ description = "CUA environment: a virtual desktop served over an rfb capability 
 # v6 SDK caps Python at <3.13; pin the upper bound so uv does not pick 3.13 and fail to resolve.
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    # v6 is not on PyPI yet, so pin the validated v6 commit (hud-python 0.5.41). The commit stays
-    # reachable after v6 merges into main. Once v6 ships to PyPI: switch to a version constraint
-    # and drop allow-direct-references. The [agents] extra brings the computer-use agent harness.
-    "hud-python[agents] @ git+https://github.com/hud-evals/hud-python.git@b72a9444310e7bd5a3828cb631b27aaa2817b475",
+    # The [agents] extra brings the computer-use agent harness.
+    "hud-python[agents]>=0.6.0",
 ]
 
 [build-system]
@@ -18,9 +16,6 @@ build-backend = "hatchling.build"
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "ruff==0.11.2", "pre-commit>=3.5.0"]
 
-[tool.hatch.metadata]
-# hatchling rejects git/URL (direct reference) deps without this.
-allow-direct-references = true
 
 [tool.ruff]
 target-version = "py311"

@@ -98,10 +98,6 @@ RUN mkdir -p /home/ubuntu/.config && chown -R ubuntu:ubuntu /home/ubuntu/.config
 
 WORKDIR /
 
-# Setup dinit services
-COPY dinit.d/ /etc/dinit.d/
-RUN mkdir -p /var/log/dinit && chmod 755 /var/log/dinit
-
 # =============================================================================
 # Stage 2: HUD Environment Setup
 # =============================================================================
@@ -111,7 +107,7 @@ FROM setup AS runtime
 RUN pip install uv --break-system-packages
 WORKDIR /mcp_server
 ENV RUST_LOG=warn
-COPY ./pyproject.toml ./uv.lock ./env.py ./tasks.py ./dinit_setup.py ./manual_dinit.py /mcp_server/
+COPY ./pyproject.toml ./uv.lock ./env.py ./tasks.py /mcp_server/
 RUN uv sync --frozen --no-dev || uv sync --no-dev
 
 # Resolution environment variables — must be consistent across all settings
@@ -131,10 +127,7 @@ RUN mkdir -p /home/ubuntu/Downloads && chmod 777 /home/ubuntu/Downloads
 # and reads these via the editable install; uid 1000 cannot read the 0700 source.
 RUN chmod 700 /mcp_server/env.py /mcp_server/tasks.py
 
-# Entrypoint boots the desktop (dinit) before the main command.
-COPY --chmod=755 ./entrypoint.sh /entrypoint.sh
-ENTRYPOINT ["/entrypoint.sh"]
-
-# Serve the v6 control channel; @env.initialize publishes the rfb (VNC) screen capability.
+# Serve the v6 control channel; @env.initialize launches the desktop (as ubuntu) + publishes the
+# rfb (VNC) screen capability. No init system - one launch path for local `hud eval` and the image.
 EXPOSE 8765
 CMD ["uv", "run", "--no-sync", "hud", "serve", "env:env", "--host", "0.0.0.0", "--port", "8765"]

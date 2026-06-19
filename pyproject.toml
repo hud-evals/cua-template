@@ -44,7 +44,6 @@ line-ending = "auto"
 asyncio_mode = "auto"
 
 [tool.hatch.build]
-# Flat top-level modules, not a package dir. dinit.d/ is config (COPY'd to /etc/dinit.d in the
-# Dockerfile), not a Python module, so it is not in the wheel.
+# Flat top-level modules, not a package dir.
 only-packages = false
-include = ["env.py", "tasks.py", "dinit_setup.py", "manual_dinit.py"]
+include = ["env.py", "tasks.py"]

@@ -11,7 +11,7 @@ The multi-step research task wants more steps:
 from env import cua_task, env  # noqa: F401  (re-export env for `hud eval tasks.py`)
 
 
-# Navigate to Wikipedia and read the tagline - bash + LLM grading
+# Navigate to Wikipedia and read the tagline - LLM-judge grading
 _open_website = cua_task(
     prompt=(
         "A Chromium browser is open on the desktop. "
@@ -19,9 +19,6 @@ _open_website = cua_task(
         "Once the page is loaded, find the tagline shown below the Wikipedia logo. "
         "Reply with your answer as plain text."
     ),
-    bash_checks=[
-        {"name": "browser_running", "command": "pgrep -f '/usr/bin/chromium'", "weight": 0.3},
-    ],
     grading_criteria=[
         "The agent's answer mentions 'free encyclopedia' in any form - this is part of Wikipedia's tagline",
     ],
@@ -51,7 +48,7 @@ _create_document.slug = "create-document-example"
 # Exercises address-bar typing, Enter, link clicks, scrolling, multi-hop navigation, and the
 # terminal. The authored bash weights sum to 1.0; env.py adds a 1.0 slot for the judge, so the
 # final grade is a clean 0.5 bash / 0.5 judge that totals exactly 1.0:
-#   browser_running 0.1 | file_exists 0.2 | file_has_birth_year 0.1 | file_has_mit 0.1 | llm_judge 0.5
+#   file_exists 0.2 | file_has_birth_year 0.15 | file_has_mit 0.15 | llm_judge 0.5
 _shannon_research = cua_task(
     prompt=(
         "A Chromium browser and an XFCE desktop are available. Complete this "
@@ -71,17 +68,16 @@ _shannon_research = cua_task(
         "7. Reply with all three facts as plain text."
     ),
     bash_checks=[
-        {"name": "browser_running", "command": "pgrep -f '/usr/bin/chromium'", "weight": 0.2},
         {"name": "file_exists", "command": "test -f /home/ubuntu/Desktop/shannon.txt", "weight": 0.4},
         {
             "name": "file_has_birth_year",
             "command": "grep -q '1916' /home/ubuntu/Desktop/shannon.txt",
-            "weight": 0.2,
+            "weight": 0.3,
         },
         {
             "name": "file_has_mit",
             "command": "grep -qiE 'MIT|Massachusetts Institute' /home/ubuntu/Desktop/shannon.txt",
-            "weight": 0.2,
+            "weight": 0.3,
         },
     ],
     grading_criteria=[

@@ -11,27 +11,42 @@ server-side with deterministic shell checks and an optional LLM judge.
 ## Layout
 
 ```
-env.py           Environment: rfb capability lifecycle + the cua_task grading template
+env.py           Environment: @env.initialize launches the desktop (as `ubuntu`) as subprocesses
+                 + publishes the rfb capability; the cua_task grading template lives here too
 tasks.py         task definitions (prompt + graders + slug)
-dinit.d/         desktop service definitions (Xvfb · x11vnc · websockify · xfce4 · chromium)
-dinit_setup.py   dinit startup wrapper
-manual_dinit.py  pure-Python dinit (loads dinit.d/, starts the `boot` bundle)
-entrypoint.sh    boots the desktop before the control channel serves
-Dockerfile.hud   desktop image + v6 control channel (hud serve env:env)
+Dockerfile.hud   desktop image (Xvfb · x11vnc · xfce4 · chromium) + v6 control channel (hud serve)
 ```
+
+The desktop is launched by `env.py` (one code path for local `hud eval` and the packaged image) —
+there is no init system. In the image it drops to the unprivileged `ubuntu` user so the agent's
+on-screen terminal (uid 1000) can't read the `chmod 700` grading code; the control channel stays
+root and can.
 
 ## Run
 
-Needs [uv](https://docs.astral.sh/uv/), Python 3.11/3.12, the HUD CLI, and Docker. The virtual
-desktop (`Xvfb`/`x11vnc`) is **Linux-only**, so the env runs in a container — not under
-`--runtime local` on macOS.
+Needs [uv](https://docs.astral.sh/uv/), Python 3.11/3.12, and the HUD CLI. The virtual desktop is
+`Xvfb` + `x11vnc` — **X11, so Linux-only**. macOS is Quartz/Cocoa with no local X server, so use
+Docker there.
 
 ```bash
 uv sync
 cp .env.example .env          # HUD_API_KEY (LLM judge) + ANTHROPIC_API_KEY (the agent)
+```
 
+**Local, dockerless — Linux, fastest iteration.** `@env.initialize` spawns the desktop itself, so
+`hud eval` runs the whole env as a local child process, no Docker, no build:
+
+```bash
+sudo apt install -y xvfb x11vnc chromium xfce4   # the desktop the env spawns
+hud eval tasks.py claude --task-ids open-website-example -y --max-steps 100
+```
+
+**Docker — required on macOS, and the packaging/deploy path.** Build once, then run a container
+that serves the env + the in-container judge and attach the agent over `tcp://` (below):
+
+```bash
 docker build -f Dockerfile.hud -t cua-template:dev .
-docker run -d --env-file .env -p 8765:8765 cua-template:dev    # serves the env + in-container judge
+docker run -d --env-file .env -p 8765:8765 cua-template:dev
 ```
 
 Point a computer-use agent at the served env. The multi-step task wants headroom (`--max-steps 100`);
@@ -92,6 +107,3 @@ module-level Task *plus* the list double-counts into a "duplicate slug" error.
 ```bash
 uv run pytest tests/ -q   # offline: grader composition (no desktop, no keys)
 ```
-
-The end-to-end check is a real `hud eval` rollout against the running desktop — there's no
-golden-replay smoke test (a computer-use agent drives pixels over VNC, not replayable tool calls).

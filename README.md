@@ -1,7 +1,6 @@
 # cua-template
 
-A HUD **v6** environment for **computer-use agents**: a virtual Linux desktop (XFCE + Chromium,
-managed by [dinit](https://github.com/davmac314/dinit)) published as an **`rfb` (VNC) capability**.
+A HUD **v6** environment for **computer-use agents**: a virtual Linux desktop published as an **`rfb` (VNC) capability**.
 The agent brings its own native computer-use tool and drives the screen; tasks grade the result
 server-side with deterministic shell checks and an optional LLM judge.
 

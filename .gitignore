@@ -27,6 +27,7 @@ remote_tasks.json
 .vscode/
 .idea/
 *.sw?
+.claude/
 
 # OS generated files
 .DS_Store
